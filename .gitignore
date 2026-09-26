@@ -5,3 +5,6 @@ node_modules/
 .env.*
 !.env.example
 *credentials*.env
+
+# Figma Make export (design reference only; the app lives in components/along)
+Responsive web app prototype/

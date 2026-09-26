@@ -40,7 +40,8 @@ node User {
         home_region: str = "",
         identity_reveal_allowed: bool = False,
         trust_score: int = 80,
-        handle_number: int = 0;
+        handle_number: int = 0,
+        member_since: str = "";
 }
 
 node Trip {
@@ -66,7 +67,19 @@ node Trip {
         owner_handle: str = "",
         owner_root: str = "",        # jid of the poster's root; "demo" for seeded trips
         is_demo: bool = False,
-        demo_name: str = "";         # display name revealed for seeded demo users
+        demo_name: str = "",         # display name revealed for seeded demo users
+        # Journey flavour from the Figma flows: ride (RIDER/DRIVER), rental / cab (PEER).
+        mode: str = "ride",
+        travel_date: str = "",
+        time_preference: str = "arrive_by",   # arrive_by | depart_at
+        people: int = 1,
+        vehicle: str = "",
+        moving_help: bool = False,
+        pickup_distance: str = "Up to 5 miles",
+        age_pref: str = "No preference",
+        gender_pref: str = "No preference",
+        demo_rating: float = 0.0,             # seeded reputation for demo users only
+        demo_reviews: int = 0;
 }
 
 node Location {
@@ -106,7 +119,11 @@ node Match {
         driver_trip_id: str = "",
         rider_root: str = "",
         driver_root: str = "",
-        created_at: str = "";
+        created_at: str = "",
+        mode: str = "ride",
+        pickup_gap_miles: float = -1.0,
+        rider_rated: bool = False,
+        driver_rated: bool = False;
 }
 
 node Conversation {
@@ -125,6 +142,12 @@ node Conversation {
 
 node Message {
     has sender_anonymous_handle: str = "", sender_root: str = "", body: str = "", timestamp: str = "";
+}
+
+# Anonymous feedback. Stores who was rated (a root id, or "demo:<handle>"),
+# never who rated — only the aggregate is ever read back.
+node Rating {
+    has ratee_key: str = "", stars: int = 0, comment: str = "", created_at: str = "";
 }
 
 node ImpactRecord {
@@ -160,14 +183,25 @@ obj TripView {
     has id: str = "", role: str = "", origin_name: str = "", destination_name: str = "",
         departure_time: str = "", arrival_deadline: str = "", recurrence_days: str = "",
         seats_available: int = 0, max_detour_minutes: int = 0, flexible_minutes: int = 0,
-        suggested_cost_share: float = 0.0, notes: str = "", owner_handle: str = "";
+        suggested_cost_share: float = 0.0, notes: str = "", owner_handle: str = "",
+        mode: str = "ride", travel_date: str = "", time_preference: str = "",
+        people: int = 1, vehicle: str = "", moving_help: bool = False,
+        pickup_distance: str = "", age_pref: str = "", gender_pref: str = "",
+        recurring: bool = True, smoking: bool = False,
+        origin_lat: float = 0.0, origin_lng: float = 0.0,
+        destination_lat: float = 0.0, destination_lng: float = 0.0,
+        owner_rating: float = 0.0, owner_reviews: int = 0;
 }
 
 obj MatchCardView {
     has id: str = "", overall_score: int = 0, route_score: int = 0, time_score: int = 0,
         detour_minutes: int = 0, preference_score: int = 0, cost_benefit_score: int = 0,
         estimated_rider_savings: float = 0.0, status: str = "",
-        driver_trip: TripView | None = None, rider_trip: TripView | None = None;
+        driver_trip: TripView | None = None, rider_trip: TripView | None = None,
+        # Caller-relative view: which trip is mine and which is the other person's.
+        my_trip: TripView | None = None, other_trip: TripView | None = None,
+        mode: str = "ride", fit_label: str = "", why: str = "",
+        other_handle: str = "", has_conversation: bool = False;
 }
 
 obj MatchDetailView {
@@ -196,12 +230,22 @@ obj ConversationView {
         my_handle: str = "", other_handle: str = "",
         me_approved: bool = False, other_approved: bool = False,
         messages: list[MessageView] = [],
-        other_display_name: str = "", other_verified: bool = False;
+        other_display_name: str = "", other_verified: bool = False,
+        other_phone: str = "", match_status: str = "", mode: str = "ride",
+        i_rated: bool = False;
+}
+
+obj ConversationSummaryView {
+    has match_id: str = "", other_handle: str = "", other_display_name: str = "",
+        last_message: str = "", last_time: str = "", status: str = "",
+        match_status: str = "", mode: str = "ride";
 }
 
 obj ProfileView {
     has display_name: str = "", home_region: str = "", rider_handle: str = "",
-        driver_handle: str = "", verified: bool = False;
+        driver_handle: str = "", verified: bool = False,
+        phone: str = "", member_since: str = "", has_ratings: bool = False,
+        completed_connections: int = 0;
 }
 
 obj ImpactView {
@@ -249,3 +293,25 @@ def approve_identity_reveal(match_id: str) -> ConversationView | None;
 def get_conversation(match_id: str) -> ConversationView | None;
 
 def:pub get_impact_metrics() -> ImpactView;
+
+# --- Figma flows: four journey types, conversations inbox, closing + rating ---
+
+# mode: ride | rental | cab. role: RIDER | DRIVER for rides, ignored (PEER) otherwise.
+def create_journey(
+    mode: str, role: str, origin_name: str, destination_name: str, travel_date: str,
+    time_preference: str, time: str, recurring: bool, flexible_minutes: int,
+    seats_available: int, people: int, max_detour_minutes: int, pickup_distance: str,
+    vehicle: str, moving_help: bool, age_pref: str, gender_pref: str, notes: str
+) -> str;
+
+def get_my_trip(trip_id: str) -> TripView | None;
+
+def get_my_conversations() -> list[ConversationSummaryView];
+
+def close_match(match_id: str) -> bool;
+
+def complete_match(match_id: str) -> bool;
+
+def rate_match(match_id: str, stars: int, comment: str) -> bool;
+
+def update_profile_details(display_name: str, home_region: str, phone: str) -> ProfileView;

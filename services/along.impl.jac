@@ -56,8 +56,11 @@ def _time_compat(rider: Trip, driver: Trip) -> int {
     window = rider.flexible_minutes + driver.flexible_minutes + 5;
     if window <= 0 { window = 20; }
     score = 100.0 - (float(diff) / float(window)) * 60.0;
-    same_days = 1 if rider.recurrence_days.strip().lower() == driver.recurrence_days.strip().lower() else 0;
-    if not same_days { score -= 15.0; }
+    # Only two recurring commutes can disagree on their weekly schedule.
+    if rider.recurring and driver.recurring
+        and rider.recurrence_days.strip().lower() != driver.recurrence_days.strip().lower() {
+        score -= 15.0;
+    }
     if score < 10.0 { score = 10.0; }
     if score > 100.0 { score = 100.0; }
     return int(round(score));
@@ -109,7 +112,10 @@ def _me() -> User {
     for u in [root-->][?:User] {
         return u;
     }
-    user = User(handle_number=random.randint(100, 999), completed_connections=0, trust_score=80);
+    user = User(
+        handle_number=random.randint(100, 999), completed_connections=0, trust_score=80,
+        member_since=datetime.datetime.now().strftime("%B %Y")
+    );
     root ++> user;
     return user;
 }
@@ -133,12 +139,23 @@ def _profile_view(me: User) -> ProfileView {
     return ProfileView(
         display_name=me.display_name, home_region=me.home_region,
         rider_handle=_handle_for(me, "RIDER"), driver_handle=_handle_for(me, "DRIVER"),
-        verified=me.verified
+        verified=me.verified, phone=me.phone, member_since=me.member_since,
+        # Only whether feedback exists — never your own score (Figma: "Your view").
+        has_ratings=_rating_summary(_my_root_id())[1] > 0,
+        completed_connections=me.completed_connections
     );
 }
 
 impl get_my_profile() -> ProfileView {
     return _profile_view(_me());
+}
+
+impl update_profile_details(display_name: str, home_region: str, phone: str) -> ProfileView {
+    me = _me();
+    me.display_name = display_name.strip()[:60];
+    me.home_region = home_region.strip()[:60];
+    me.phone = phone.strip()[:30];
+    return _profile_view(me);
 }
 
 impl update_profile(display_name: str, home_region: str) -> ProfileView {
@@ -185,61 +202,119 @@ def _make_trip(
     return trip;
 }
 
+# Demo people for each Figma flow. Seeded per handle, so re-running only fills gaps.
+glob DEMO_PEOPLE: list[dict] = [
+    # Drivers heading toward Ann Arbor ("Find a ride")
+    {"handle": "MapleDriver", "name": "Marcus", "role": "DRIVER", "mode": "ride", "from": "Flint, MI",
+     "to": "Ann Arbor, MI", "dep": "07:40", "arr": "09:05", "seats": 2, "rating": 4.9, "reviews": 28,
+     "note": "Drive this route every weekday, happy to pick up on the way."},
+    {"handle": "NorthStar22", "name": "Nadia", "role": "DRIVER", "mode": "ride", "from": "Fenton, MI",
+     "to": "Ann Arbor, MI", "dep": "08:05", "arr": "09:00", "seats": 3, "rating": 4.8, "reviews": 16,
+     "note": "Leaving from Fenton Rd, quiet ride preferred."},
+    {"handle": "MorningMiles", "name": "Theo", "role": "DRIVER", "mode": "ride", "from": "Holly, MI",
+     "to": "Ann Arbor, MI", "dep": "08:20", "arr": "09:15", "seats": 1, "rating": 0.0, "reviews": 0,
+     "note": "New to Along, flexible by 20 minutes."},
+    # Riders looking for a lift ("Find a buddy")
+    {"handle": "GardenRider", "name": "Priya", "role": "RIDER", "mode": "ride", "from": "Grand Blanc, MI",
+     "to": "Ann Arbor, MI", "dep": "07:35", "arr": "09:15", "seats": 0, "rating": 4.9, "reviews": 11,
+     "note": "Need to be at the office by 9:15."},
+    {"handle": "CampusBound", "name": "Devon", "role": "RIDER", "mode": "ride", "from": "Fenton, MI",
+     "to": "Ann Arbor, MI", "dep": "07:20", "arr": "08:30", "seats": 0, "rating": 4.7, "reviews": 8,
+     "note": "Heading to campus, two of us."},
+    {"handle": "EarlyRobin", "name": "Sam", "role": "RIDER", "mode": "ride", "from": "Holly, MI",
+     "to": "Ann Arbor, MI", "dep": "07:50", "arr": "09:00", "seats": 0, "rating": 0.0, "reviews": 0,
+     "note": "Flexible by 20 minutes."},
+    {"handle": "LakeLooper", "name": "Jordan", "role": "RIDER", "mode": "ride", "from": "Howell, MI",
+     "to": "Ann Arbor, MI", "dep": "07:15", "arr": "08:50", "seats": 0, "rating": 4.6, "reviews": 5,
+     "note": "Looking for a regular carpool."},
+    {"handle": "YpsiCommuter", "name": "Casey", "role": "RIDER", "mode": "ride", "from": "Ypsilanti, MI",
+     "to": "Detroit, MI", "dep": "07:45", "arr": "09:00", "seats": 0, "rating": 4.8, "reviews": 9,
+     "note": "Looking for a regular carpool."},
+    # Rental partners ("Rent together")
+    {"handle": "MovingNorth", "name": "Alexis", "role": "PEER", "mode": "rental", "from": "Novi, MI",
+     "to": "Detroit, MI", "dep": "09:00", "arr": "", "seats": 0, "people": 2, "vehicle": "Pickup",
+     "moving": True, "rating": 4.8, "reviews": 6, "note": "Also moving and needs cargo room."},
+    {"handle": "WeekendWay", "name": "Riley", "role": "PEER", "mode": "rental", "from": "Farmington Hills, MI",
+     "to": "Detroit, MI", "dep": "10:00", "arr": "", "seats": 0, "people": 1, "vehicle": "SUV",
+     "moving": False, "rating": 4.9, "reviews": 14, "note": "Weekend trip, flexible dates."},
+    {"handle": "LakeTrip", "name": "Morgan", "role": "PEER", "mode": "rental", "from": "Livonia, MI",
+     "to": "Detroit, MI", "dep": "13:00", "arr": "", "seats": 0, "people": 2, "vehicle": "Minivan",
+     "moving": False, "rating": 0.0, "reviews": 0, "note": "Flexible timing."},
+    # Cab sharers ("Share a cab")
+    {"handle": "WindowSeat", "name": "Jamie", "role": "PEER", "mode": "cab", "from": "Detroit Metro Airport",
+     "to": "Downtown Detroit", "dep": "18:10", "arr": "", "seats": 0, "people": 1, "rating": 4.9,
+     "reviews": 21, "note": "Landing at McNamara Terminal."},
+    {"handle": "CityLight", "name": "Avery", "role": "PEER", "mode": "cab", "from": "Detroit Metro Airport",
+     "to": "Midtown Detroit", "dep": "18:30", "arr": "", "seats": 0, "people": 2, "rating": 4.7,
+     "reviews": 9, "note": "Evans Terminal pickup."},
+    {"handle": "CarryOnOnly", "name": "Quinn", "role": "PEER", "mode": "cab", "from": "Romulus, MI",
+     "to": "Downtown Detroit", "dep": "18:15", "arr": "", "seats": 0, "people": 1, "rating": 0.0,
+     "reviews": 0, "note": "Airport hotel, carry-on only."},
+];
+
 impl seed_demo_network() -> str {
-    for t in _public_trips() {
-        if t.is_demo {
-            return "Demo network already loaded.";
+    present = set([t.owner_handle for t in _public_trips() if t.is_demo]);
+    added = 0;
+    for p in DEMO_PEOPLE {
+        handle = p["handle"] as str;
+        if handle in present {
+            continue;
         }
-    }
-
-    _make_trip(
-        "Rider 184", "demo", "RIDER", "Grand Blanc, MI", 42.9269, -83.6410, "Ann Arbor, MI", 42.2808, -83.7430,
-        "07:35", "09:00", True, "Mon-Fri", 20, 0, 0, False, False, True, "moderate",
-        "Need to be at the office by 9am, flexible either way.", 40.0, True, "Priya"
-    );
-    _make_trip(
-        "Driver 072", "demo", "DRIVER", "Flint, MI", 43.0125, -83.6875, "Ann Arbor, MI", 42.2808, -83.7430,
-        "07:40", "09:10", True, "Mon-Fri", 10, 2, 10, False, False, True, "moderate",
-        "Drive this route every weekday, happy to pick up on the way.", 10.0, True, "Marcus"
-    );
-
-    weaker = [
-        {"handle": "Rider 233", "name": "Devon", "city": "Fenton, MI", "lat": 42.7970, "lng": -83.7052,
-         "dest": "Ann Arbor, MI", "dlat": 42.2808, "dlng": -83.7430, "dep": "07:20", "arr": "09:00"},
-        {"handle": "Rider 067", "name": "Sam", "city": "Howell, MI", "lat": 42.6072, "lng": -83.9294,
-         "dest": "Ann Arbor, MI", "dlat": 42.2808, "dlng": -83.7430, "dep": "07:15", "arr": "08:50"},
-        {"handle": "Rider 145", "name": "Jordan", "city": "Novi, MI", "lat": 42.4806, "lng": -83.4755,
-         "dest": "Ann Arbor, MI", "dlat": 42.2808, "dlng": -83.7430, "dep": "07:50", "arr": "08:45"},
-        {"handle": "Rider 298", "name": "Alexis", "city": "Brighton, MI", "lat": 42.5284, "lng": -83.7796,
-         "dest": "Detroit, MI", "dlat": 42.3314, "dlng": -83.0458, "dep": "07:10", "arr": "08:40"},
-        {"handle": "Rider 312", "name": "Casey", "city": "Ypsilanti, MI", "lat": 42.2411, "lng": -83.6130,
-         "dest": "Detroit, MI", "dlat": 42.3314, "dlng": -83.0458, "dep": "07:45", "arr": "09:00"},
-        {"handle": "Rider 401", "name": "Riley", "city": "Canton, MI", "lat": 42.3086, "lng": -83.4820,
-         "dest": "Ann Arbor, MI", "dlat": 42.2808, "dlng": -83.7430, "dep": "08:05", "arr": "08:55"},
-    ];
-    for w in weaker {
-        _make_trip(
-            w["handle"] as str, "demo", "RIDER", w["city"] as str, w["lat"] as float, w["lng"] as float,
-            w["dest"] as str, w["dlat"] as float, w["dlng"] as float,
-            w["dep"] as str, w["arr"] as str, True, "Mon-Fri", 15, 0, 0, False, False, True,
-            "moderate", "Looking for a regular carpool.", 30.0, True, w["name"] as str
+        mode = p["mode"] as str;
+        origin = _town_coords(p["from"] as str);
+        dest = _town_coords(p["to"] as str);
+        trip = _make_trip(
+            handle, "demo", p["role"] as str, p["from"] as str, origin[0], origin[1],
+            p["to"] as str, dest[0], dest[1], p["dep"] as str, p["arr"] as str,
+            mode == "ride", "Mon-Fri" if mode == "ride" else "", 20, p["seats"] as int,
+            10 if p["role"] == "DRIVER" else 0, False, False, True, "moderate",
+            p["note"] as str, 20.0 if p["role"] == "RIDER" else 10.0, True, p["name"] as str
         );
+        trip.mode = mode;
+        trip.people = (p["people"] as int) if "people" in p else 1;
+        trip.vehicle = (p["vehicle"] as str) if "vehicle" in p else "";
+        trip.moving_help = (p["moving"] as bool) if "moving" in p else False;
+        trip.demo_rating = p["rating"] as float;
+        trip.demo_reviews = p["reviews"] as int;
+        added += 1;
     }
-
-    return "Michigan demo network loaded: 8 riders/drivers across Grand Blanc, Flint, Fenton, Howell, Novi, Brighton, Ypsilanti and Canton.";
+    if added == 0 {
+        return "Demo network already loaded.";
+    }
+    return f"Michigan demo network loaded: {added} travelers across rides, rentals and cab shares.";
 }
 
+glob TOWNS: dict[str, list[float]] = {
+    "grand blanc": [42.9269, -83.6410], "flint": [43.0125, -83.6875],
+    "ann arbor": [42.2808, -83.7430], "fenton": [42.7970, -83.7052],
+    "howell": [42.6072, -83.9294], "novi": [42.4806, -83.4755],
+    "brighton": [42.5284, -83.7796], "ypsilanti": [42.2411, -83.6130],
+    "canton": [42.3086, -83.4820], "detroit": [42.3314, -83.0458],
+    "holly": [42.7917, -83.6277], "livonia": [42.3684, -83.3527],
+    "farmington hills": [42.4990, -83.3677], "romulus": [42.2223, -83.3966],
+    "detroit metro airport": [42.2162, -83.3554], "dtw": [42.2162, -83.3554],
+    "airport": [42.2162, -83.3554], "downtown detroit": [42.3314, -83.0458],
+    "midtown detroit": [42.3569, -83.0663], "dearborn": [42.3223, -83.1763],
+    "troy": [42.6064, -83.1498], "royal oak": [42.4895, -83.1446],
+    "southfield": [42.4734, -83.2219], "pontiac": [42.6389, -83.2910],
+    "auburn hills": [42.6875, -83.2341], "clarkston": [42.7359, -83.4189],
+    "lansing": [42.7325, -84.5555], "east lansing": [42.7370, -84.4839],
+    "grand rapids": [42.9634, -85.6681], "kalamazoo": [42.2917, -85.5872],
+    "saginaw": [43.4195, -83.9508],
+};
+
+def _town_key_length(k: str) -> int {
+    return len(k);
+}
+
+# Longest known place name contained in the input wins, so "Detroit Metro
+# Airport" resolves to the airport rather than downtown Detroit.
 def _town_coords(name: str) -> list[float] {
-    key = name.strip().lower().split(",")[0];
-    table = {
-        "grand blanc": [42.9269, -83.6410], "flint": [43.0125, -83.6875],
-        "ann arbor": [42.2808, -83.7430], "fenton": [42.7970, -83.7052],
-        "howell": [42.6072, -83.9294], "novi": [42.4806, -83.4755],
-        "brighton": [42.5284, -83.7796], "ypsilanti": [42.2411, -83.6130],
-        "canton": [42.3086, -83.4820], "detroit": [42.3314, -83.0458],
-    };
-    if key in table {
-        return table[key];
+    lowered = name.strip().lower();
+    for key in sorted(TOWNS.keys(), key=_town_key_length, reverse=True) {
+        if key in lowered {
+            return TOWNS[key];
+        }
     }
     return [42.7325, -84.5555];   # Michigan centroid fallback for unrecognized towns
 }
@@ -267,17 +342,105 @@ impl create_trip(
     return jid(trip);
 }
 
+def _hhmm_shift(hhmm: str, minutes: int) -> str {
+    total = (_minutes_of_day(hhmm) + minutes) % (24 * 60);
+    return f"{total // 60:02d}:{total % 60:02d}";
+}
+
+impl create_journey(
+    mode: str, role: str, origin_name: str, destination_name: str, travel_date: str,
+    time_preference: str, time: str, recurring: bool, flexible_minutes: int,
+    seats_available: int, people: int, max_detour_minutes: int, pickup_distance: str,
+    vehicle: str, moving_help: bool, age_pref: str, gender_pref: str, notes: str
+) -> str {
+    me = _me();
+    clean_mode = mode if mode in ["ride", "rental", "cab"] else "ride";
+    clean_role = ("DRIVER" if role == "DRIVER" else "RIDER") if clean_mode == "ride" else "PEER";
+    origin_coords = _town_coords(origin_name);
+    dest_coords = _town_coords(destination_name);
+
+    # Scoring compares departures, so derive one from an arrive-by time.
+    km = _haversine_km(origin_coords[0], origin_coords[1], dest_coords[0], dest_coords[1]);
+    drive_minutes = int(km * 0.9) + 10;
+    arrive_by = time_preference == "arrive_by";
+    departure = _hhmm_shift(time, -drive_minutes) if arrive_by else time;
+    deadline = time if arrive_by else _hhmm_shift(time, drive_minutes);
+
+    handle = _handle_for(me, clean_role if clean_role != "PEER" else "RIDER");
+    trip = _make_trip(
+        handle, _my_root_id(), clean_role,
+        origin_name.strip()[:80], origin_coords[0], origin_coords[1],
+        destination_name.strip()[:80], dest_coords[0], dest_coords[1],
+        departure, deadline, recurring, "Mon-Fri" if recurring else travel_date.strip()[:40],
+        flexible_minutes, seats_available if clean_role == "DRIVER" else 0,
+        max_detour_minutes if clean_role == "DRIVER" else 0,
+        False, False, True, "moderate", notes.strip()[:500],
+        20.0 if clean_role == "RIDER" else 8.0, False, ""
+    );
+    trip.mode = clean_mode;
+    trip.travel_date = travel_date.strip()[:40];
+    trip.time_preference = "arrive_by" if arrive_by else "depart_at";
+    trip.people = people if people > 0 else 1;
+    trip.vehicle = vehicle.strip()[:30] if clean_mode == "rental" else "";
+    trip.moving_help = moving_help if clean_mode == "rental" else False;
+    trip.pickup_distance = pickup_distance.strip()[:30];
+    trip.age_pref = age_pref.strip()[:30] or "No preference";
+    trip.gender_pref = gender_pref.strip()[:30] or "No preference";
+    me +>:Posts:+> trip;
+
+    # Make sure there is always someone to match with in the demo.
+    seed_demo_network();
+    return jid(trip);
+}
+
+impl get_my_trip(trip_id: str) -> TripView | None {
+    t = _load_trip(trip_id);
+    if t is None or (t as Trip).owner_root != _my_root_id() {
+        return None;
+    }
+    return _trip_view(t as Trip);
+}
+
 # ---------------------------------------------------------------------------
 # Matching — candidates come from root.shared; each Match is opened to both sides
 # ---------------------------------------------------------------------------
 
+# Ratings are keyed by root id; demo users (who share the "demo" root) by handle.
+def _ratee_key(owner_root: str, owner_handle: str) -> str {
+    return "demo:" + owner_handle if owner_root == "demo" else owner_root;
+}
+
+# (average, count) across seeded reputation plus real anonymous ratings.
+def _rating_summary(key: str, base_rating: float = 0.0, base_reviews: int = 0) -> tuple[float, int] {
+    total = base_rating * base_reviews;
+    count = base_reviews;
+    for r in [root.shared-->][?:Rating] {
+        if r.ratee_key == key {
+            total += r.stars;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return (0.0, 0);
+    }
+    return (round(total / count, 1), count);
+}
+
 def _trip_view(t: Trip) -> TripView {
+    rating = _rating_summary(_ratee_key(t.owner_root, t.owner_handle), t.demo_rating, t.demo_reviews);
     return TripView(
         id=jid(t), role=t.role, origin_name=t.origin_name, destination_name=t.destination_name,
         departure_time=t.departure_time, arrival_deadline=t.arrival_deadline,
         recurrence_days=t.recurrence_days, seats_available=t.seats_available,
         max_detour_minutes=t.max_detour_minutes, flexible_minutes=t.flexible_minutes,
-        suggested_cost_share=t.suggested_cost_share, notes=t.notes, owner_handle=t.owner_handle
+        suggested_cost_share=t.suggested_cost_share, notes=t.notes, owner_handle=t.owner_handle,
+        mode=t.mode, travel_date=t.travel_date, time_preference=t.time_preference,
+        people=t.people, vehicle=t.vehicle, moving_help=t.moving_help,
+        pickup_distance=t.pickup_distance, age_pref=t.age_pref, gender_pref=t.gender_pref,
+        recurring=t.recurring, smoking=_preference_of(t).smoking,
+        origin_lat=t.origin_lat, origin_lng=t.origin_lng,
+        destination_lat=t.destination_lat, destination_lng=t.destination_lng,
+        owner_rating=rating[0], owner_reviews=rating[1]
     );
 }
 
@@ -326,16 +489,60 @@ def _find_match(match_id: str) -> Match | None {
     return None;
 }
 
+def _fit_label(m: Match) -> str {
+    if m.mode == "cab" {
+        return f"{m.route_score}% journey overlap";
+    }
+    if m.overall_score >= 85 {
+        return "Excellent route fit" if m.mode == "ride" else "Great timing match";
+    }
+    if m.overall_score >= 70 {
+        return "Good route fit" if m.mode == "ride" else "Good area match";
+    }
+    return "Possible match";
+}
+
+# One deterministic sentence for the "Why it matches" box — no LLM involved.
+def _why_text(m: Match, mine: Trip | None, other: Trip | None) -> str {
+    if mine is None or other is None {
+        return f"{m.route_score}% route overlap with a {m.detour_minutes}-minute detour.";
+    }
+    me_t = mine as Trip;
+    ot = other as Trip;
+    gap = m.pickup_gap_miles;
+    near = "close to" if gap >= 0 and gap < 4 else ("a short hop from" if gap >= 0 and gap < 12 else "within reach of");
+    if m.mode == "ride" and ot.role == "DRIVER" {
+        return f"Their {ot.origin_name.split(',')[0]} → {ot.destination_name.split(',')[0]} route passes {near} {me_t.origin_name.split(',')[0]}, adding about {m.detour_minutes} min.";
+    }
+    if m.mode == "ride" {
+        return f"Their pickup area in {ot.origin_name.split(',')[0]} is {near} your route, about a {m.detour_minutes}-minute detour.";
+    }
+    if m.mode == "rental" {
+        extra = " and needs cargo room" if ot.moving_help else "";
+        vehicle = f" ({ot.vehicle})" if ot.vehicle else "";
+        return f"Also heading from {ot.origin_name.split(',')[0]} toward {ot.destination_name.split(',')[0]}{vehicle}{extra}.";
+    }
+    return f"Similar timing and a destination near {ot.destination_name.split(',')[0]}; their start is {near} yours.";
+}
+
 def _match_to_card(m: Match) -> MatchCardView {
     rider_trip = _load_trip(m.rider_trip_id);
     driver_trip = _load_trip(m.driver_trip_id);
+    i_am_rider = m.rider_root == _my_root_id();
+    mine = rider_trip if i_am_rider else driver_trip;
+    other = driver_trip if i_am_rider else rider_trip;
     return MatchCardView(
         id=jid(m), overall_score=m.overall_score, route_score=m.route_score, time_score=m.time_score,
         detour_minutes=m.detour_minutes, preference_score=m.preference_score,
         cost_benefit_score=m.cost_benefit_score, estimated_rider_savings=m.estimated_rider_savings,
         status=m.status,
         driver_trip=_trip_view(driver_trip) if driver_trip is not None else None,
-        rider_trip=_trip_view(rider_trip) if rider_trip is not None else None
+        rider_trip=_trip_view(rider_trip) if rider_trip is not None else None,
+        my_trip=_trip_view(mine) if mine is not None else None,
+        other_trip=_trip_view(other) if other is not None else None,
+        mode=m.mode, fit_label=_fit_label(m), why=_why_text(m, mine, other),
+        other_handle=m.driver_handle if i_am_rider else m.rider_handle,
+        has_conversation=_find_conversation(m) is not None
     );
 }
 
@@ -364,7 +571,9 @@ impl run_matching(trip_id: str) -> list[MatchCardView] {
         return [];   # you can only run matching for your own trip
     }
     o = origin as Trip;
-    opposite_role = "DRIVER" if o.role == "RIDER" else "RIDER";
+    # Rides pair opposite roles; rentals and cabs pair peers of the same mode.
+    is_peer = o.role == "PEER";
+    wanted_role = "PEER" if is_peer else ("DRIVER" if o.role == "RIDER" else "RIDER");
 
     existing: dict[str, Match] = {};
     for m in _my_matches() {
@@ -374,16 +583,20 @@ impl run_matching(trip_id: str) -> list[MatchCardView] {
     # A. CandidateDiscovery: active, opposite-role trips from other users.
     candidates = [
         t for t in _public_trips()
-        if t.active and t.role == opposite_role and jid(t) != trip_id and t.owner_root != me
+        if t.active and t.role == wanted_role and t.mode == o.mode
+        and jid(t) != trip_id and t.owner_root != me
     ];
 
     results: list[MatchCardView] = [];
     for c in candidates {
-        rider_trip = o if o.role == "RIDER" else c;
-        driver_trip = c if o.role == "RIDER" else o;
+        # For peers the searcher sits on the "rider" side of the Match.
+        rider_trip = o if (o.role == "RIDER" or is_peer) else c;
+        driver_trip = c if (o.role == "RIDER" or is_peer) else o;
         key = jid(rider_trip) + ":" + jid(driver_trip);
         if key in existing {
-            results.append(_match_to_card(existing[key]));
+            if existing[key].status != "closed" {
+                results.append(_match_to_card(existing[key]));
+            }
             continue;
         }
 
@@ -395,6 +608,7 @@ impl run_matching(trip_id: str) -> list[MatchCardView] {
         # G. MatchScoring
         overall = _score_match(route["overlap"] as int, route["detour"] as int, time_score, pref_score, cost["score"] as int);
 
+        gap_miles: float = (route["origin_gap"] as float) * 0.621371;
         m = Match(
             overall_score=overall, route_score=route["overlap"] as int, time_score=time_score,
             detour_minutes=route["detour"] as int, preference_score=pref_score,
@@ -403,7 +617,8 @@ impl run_matching(trip_id: str) -> list[MatchCardView] {
             rider_handle=rider_trip.owner_handle, driver_handle=driver_trip.owner_handle,
             rider_trip_id=jid(rider_trip), driver_trip_id=jid(driver_trip),
             rider_root=rider_trip.owner_root, driver_root=driver_trip.owner_root,
-            created_at=_now()
+            created_at=_now(), mode=o.mode,
+            pickup_gap_miles=float(f"{gap_miles:.1f}")
         );
         root.shared ++> m;
         _share_with(m, c.owner_root, WritePerm);
@@ -420,7 +635,7 @@ impl run_matching(trip_id: str) -> list[MatchCardView] {
 }
 
 impl get_match_results() -> list[MatchCardView] {
-    return _sort_cards([_match_to_card(m) for m in _my_matches()]);
+    return _sort_cards([_match_to_card(m) for m in _my_matches() if m.status != "closed"]);
 }
 
 impl get_match_details(match_id: str) -> MatchDetailView | None {
@@ -590,8 +805,24 @@ def _convo_view(m: Match, convo: Conversation) -> ConversationView {
         other_handle=m.driver_handle if role == "RIDER" else m.rider_handle,
         me_approved=convo.rider_approved if role == "RIDER" else convo.driver_approved,
         other_approved=convo.driver_approved if role == "RIDER" else convo.rider_approved,
-        messages=views, other_display_name=identity[0], other_verified=identity[1]
+        messages=views, other_display_name=identity[0], other_verified=identity[1],
+        other_phone=_other_phone(m, convo), match_status=m.status, mode=m.mode,
+        i_rated=m.rider_rated if role == "RIDER" else m.driver_rated
     );
+}
+
+# Contact details the other person saved — only after a mutual reveal.
+def _other_phone(m: Match, convo: Conversation) -> str {
+    if not convo.identity_revealed or _is_demo_match(m) {
+        return "";
+    }
+    other_profile_id = convo.driver_profile_id if _my_role(m) == "RIDER" else convo.rider_profile_id;
+    try {
+        prof = jobj(other_profile_id);
+    } except Exception {
+        return "";
+    }
+    return (prof as User).phone if isinstance(prof, User) else "";
 }
 
 impl create_anonymous_connection(match_id: str) -> ConversationView | None {
@@ -698,4 +929,83 @@ impl get_impact_metrics() -> ImpactView {
         empty_seats_activated=seats, shared_miles=float(f"{miles:.1f}"),
         communities_connected=len(cities), cities=cities
     );
+}
+
+# ---------------------------------------------------------------------------
+# Figma flows — conversations inbox, decline, complete, anonymous rating
+# ---------------------------------------------------------------------------
+
+def _summary_time(s: ConversationSummaryView) -> str {
+    return s.last_time;
+}
+
+impl get_my_conversations() -> list[ConversationSummaryView] {
+    out: list[ConversationSummaryView] = [];
+    for m in _my_matches() {
+        convo = _find_conversation(m);
+        if convo is None {
+            continue;
+        }
+        c = convo as Conversation;
+        view = _convo_view(m, c);
+        last = c.messages[-1] if len(c.messages) > 0 else {"body": "", "ts": c.created_at};
+        out.append(ConversationSummaryView(
+            match_id=jid(m), other_handle=view.other_handle,
+            other_display_name=view.other_display_name,
+            last_message=last["body"] or "Conversation started",
+            last_time=last["ts"], status=c.status, match_status=m.status, mode=m.mode
+        ));
+    }
+    return sorted(out, key=_summary_time, reverse=True);
+}
+
+impl close_match(match_id: str) -> bool {
+    m = _find_match(match_id);
+    if m is None {
+        return False;
+    }
+    (m as Match).status = "closed";
+    return True;
+}
+
+impl complete_match(match_id: str) -> bool {
+    m = _find_match(match_id);
+    if m is None {
+        return False;
+    }
+    mt = m as Match;
+    if mt.status != "completed" {
+        mt.status = "completed";
+        me = _me();
+        me.completed_connections += 1;
+        rec = _impact_record();
+        rec.connections_created += 1;
+    }
+    return True;
+}
+
+impl rate_match(match_id: str, stars: int, comment: str) -> bool {
+    m = _find_match(match_id);
+    if m is None or stars < 1 or stars > 5 {
+        return False;
+    }
+    mt = m as Match;
+    role = _my_role(mt);
+    already = mt.rider_rated if role == "RIDER" else mt.driver_rated;
+    if already {
+        return False;
+    }
+    other_handle = mt.driver_handle if role == "RIDER" else mt.rider_handle;
+    rating = Rating(
+        ratee_key=_ratee_key(_other_root(mt), other_handle), stars=stars,
+        comment=comment.strip()[:1000], created_at=_now()
+    );
+    root.shared ++> rating;
+    grant(rating, level=ReadPerm);
+    if role == "RIDER" {
+        mt.rider_rated = True;
+    } else {
+        mt.driver_rated = True;
+    }
+    return True;
 }
