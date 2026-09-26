@@ -79,7 +79,8 @@ node Trip {
         age_pref: str = "No preference",
         gender_pref: str = "No preference",
         demo_rating: float = 0.0,             # seeded reputation for demo users only
-        demo_reviews: int = 0;
+        demo_reviews: int = 0,
+        route_json: str = "";                 # cached Google road route, see get_trip_route
 }
 
 node Location {
@@ -235,6 +236,18 @@ obj ConversationView {
         i_rated: bool = False;
 }
 
+# Browser-side Google Maps settings. The key is a browser key (restrict it by
+# HTTP referrer in Google Cloud); empty means "no key, use the drawn map".
+obj MapsConfigView {
+    has api_key: str = "", map_id: str = "";
+}
+
+# A trip's road route as [lat, lng] points. source: google | straight.
+obj RouteView {
+    has points: list[list[float]] = [], distance_km: float = 0.0,
+        duration_min: int = 0, source: str = "straight";
+}
+
 obj ConversationSummaryView {
     has match_id: str = "", other_handle: str = "", other_display_name: str = "",
         last_message: str = "", last_time: str = "", status: str = "",
@@ -306,6 +319,8 @@ def create_journey(
 
 def get_my_trip(trip_id: str) -> TripView | None;
 
+def get_my_trips() -> list[TripView];
+
 def get_my_conversations() -> list[ConversationSummaryView];
 
 def close_match(match_id: str) -> bool;
@@ -315,3 +330,9 @@ def complete_match(match_id: str) -> bool;
 def rate_match(match_id: str, stars: int, comment: str) -> bool;
 
 def update_profile_details(display_name: str, home_region: str, phone: str) -> ProfileView;
+
+# --- Google Maps ---
+
+def get_maps_config() -> MapsConfigView;
+
+def get_trip_route(trip_id: str) -> RouteView;

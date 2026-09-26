@@ -375,3 +375,15 @@ button.avatar { cursor: pointer; }
 .journey-timeline .timeline-stops { display: flex; flex-direction: column; justify-content: space-between; gap: 6px; }
 .journey-timeline .timeline-stops > div { display: flex; flex-direction: column; gap: 3px; }
 .journey-timeline .timeline-stops p { margin: 0 0 6px; }
+
+/* Google Maps variant of the map panel */
+.map-canvas.google { background: #e9eee7; }
+.map-canvas.google .gmap { position: absolute; inset: 0; }
+.map-canvas.google .result-marker { position: relative; left: auto; top: auto; margin: 0 0 12px; }
+.map-canvas.google .trip-end { position: relative; margin: 0; }
+.map-canvas.google .traffic-legend, .map-canvas.google .type-legend { z-index: 2; }
+.dash-swatch { width: 16px; height: 0; border-top: 3px dashed var(--al-green-dark); }
+.dash-swatch.blue { border-color: var(--al-blue); }
+.dash-swatch.purple { border-color: var(--al-purple); }
+.dash-swatch.amber { border-color: var(--al-amber); }
+.chat-details-map .map-canvas.google .traffic-legend, .chat-details-map .map-canvas.google .type-legend { display: none; }

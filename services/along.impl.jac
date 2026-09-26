@@ -8,6 +8,10 @@ and it only narrates numbers this file already produced.
 import math;
 import random;
 import datetime;
+import os;
+import json;
+import from urllib.request { Request, urlopen }
+import from urllib.parse { urlencode }
 import from uuid { UUID }
 import from jaclang { JacRuntime as Jac }
 
@@ -316,7 +320,149 @@ def _town_coords(name: str) -> list[float] {
             return TOWNS[key];
         }
     }
+    found = _geocode(name);
+    if found is not None {
+        return found;
+    }
     return [42.7325, -84.5555];   # Michigan centroid fallback for unrecognized towns
+}
+
+# ---------------------------------------------------------------------------
+# Google Maps — geocoding unknown places and real road routes. Everything
+# degrades to the built-in town table / straight lines when no key is set.
+# ---------------------------------------------------------------------------
+
+glob _GEOCODE_CACHE: dict[str, list[float]] = {},
+     _ROUTE_CACHE: dict[str, RouteView] = {};
+
+def _maps_key() -> str {
+    return os.environ.get("GOOGLE_MAPS_API_KEY", "").strip();
+}
+
+def _http_json(url: str, body: dict | None, headers: dict[str, str]) -> dict | None {
+    data = json.dumps(body).encode("utf-8") if body is not None else None;
+    req = Request(url, data=data, headers=headers, method="POST" if body is not None else "GET");
+    try {
+        with urlopen(req, timeout=8) as resp {
+            return json.loads(resp.read().decode("utf-8"));
+        }
+    } except Exception as e {
+        print(f"[maps] request failed: {e}");
+        return None;
+    }
+}
+
+# Place name -> [lat, lng], biased to Michigan. None when unavailable.
+def _geocode(name: str) -> list[float] | None {
+    key = _maps_key();
+    clean = name.strip();
+    if not key or not clean {
+        return None;
+    }
+    if clean.lower() in _GEOCODE_CACHE {
+        return _GEOCODE_CACHE[clean.lower()];
+    }
+    query = urlencode({
+        "address": clean, "components": "administrative_area:MI|country:US", "key": key
+    });
+    result = _http_json("https://maps.googleapis.com/maps/api/geocode/json?" + query, None, {});
+    if result is None or result.get("status") != "OK" or not result.get("results") {
+        return None;
+    }
+    loc = result["results"][0]["geometry"]["location"];
+    coords: list[float] = [float(loc["lat"]), float(loc["lng"])];
+    _GEOCODE_CACHE[clean.lower()] = coords;
+    return coords;
+}
+
+def _straight_route(t: Trip) -> RouteView {
+    km = _haversine_km(t.origin_lat, t.origin_lng, t.destination_lat, t.destination_lng);
+    return RouteView(
+        points=[[t.origin_lat, t.origin_lng], [t.destination_lat, t.destination_lng]],
+        distance_km=float(f"{km:.1f}"), duration_min=int(km * 0.9) + 10, source="straight"
+    );
+}
+
+# Driving route from the Routes API, thinned to at most ~250 points.
+def _google_route(t: Trip) -> RouteView | None {
+    key = _maps_key();
+    if not key {
+        return None;
+    }
+    body = {
+        "origin": {"location": {"latLng": {"latitude": t.origin_lat, "longitude": t.origin_lng}}},
+        "destination": {"location": {"latLng": {"latitude": t.destination_lat, "longitude": t.destination_lng}}},
+        "travelMode": "DRIVE",
+        "polylineEncoding": "GEO_JSON_LINESTRING"
+    };
+    headers = {
+        "Content-Type": "application/json", "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask": "routes.duration,routes.distanceMeters,routes.polyline.geoJsonLinestring"
+    };
+    result = _http_json("https://routes.googleapis.com/directions/v2:computeRoutes", body, headers);
+    if result is None or not result.get("routes") {
+        return None;
+    }
+    route = result["routes"][0];
+    coords = route["polyline"]["geoJsonLinestring"]["coordinates"];
+    step = max(1, len(coords) // 250);
+    points: list[list[float]] = [[float(c[1]), float(c[0])] for c in coords[::step]];
+    last = coords[-1];
+    if points[-1] != [float(last[1]), float(last[0])] {
+        points.append([float(last[1]), float(last[0])]);
+    }
+    seconds = int(str(route.get("duration", "0s")).rstrip("s") or "0");
+    return RouteView(
+        points=points, distance_km=float(f"{route.get('distanceMeters', 0) / 1000:.1f}"),
+        duration_min=seconds // 60, source="google"
+    );
+}
+
+impl get_maps_config() -> MapsConfigView {
+    browser_key = os.environ.get("GOOGLE_MAPS_BROWSER_KEY", "").strip() or _maps_key();
+    return MapsConfigView(
+        api_key=browser_key,
+        map_id=os.environ.get("GOOGLE_MAPS_MAP_ID", "").strip() or "DEMO_MAP_ID"
+    );
+}
+
+impl get_trip_route(trip_id: str) -> RouteView {
+    loaded = _load_trip(trip_id);
+    if loaded is None {
+        return RouteView();
+    }
+    t = loaded as Trip;
+    cache_key = f"{t.origin_lat:.4f},{t.origin_lng:.4f}>{t.destination_lat:.4f},{t.destination_lng:.4f}";
+    if cache_key in _ROUTE_CACHE {
+        return _ROUTE_CACHE[cache_key];
+    }
+    if t.route_json {
+        try {
+            saved = json.loads(t.route_json);
+            view = RouteView(
+                points=saved["points"] as list[list[float]],
+                distance_km=saved["distance_km"] as float,
+                duration_min=saved["duration_min"] as int, source="google"
+            );
+            _ROUTE_CACHE[cache_key] = view;
+            return view;
+        } except Exception {
+            print("[maps] ignoring unreadable cached route");
+        }
+    }
+    fetched = _google_route(t);
+    if fetched is None {
+        return _straight_route(t);   # not cached, so a key added later takes effect
+    }
+    route = fetched as RouteView;
+    _ROUTE_CACHE[cache_key] = route;
+    if t.owner_root == _my_root_id() {
+        # Only the owner may write the trip; others just use the in-process cache.
+        t.route_json = json.dumps({
+            "points": route.points, "distance_km": route.distance_km, "duration_min": route.duration_min
+        });
+    }
+    return route;
 }
 
 impl create_trip(
@@ -391,6 +537,10 @@ impl create_journey(
     # Make sure there is always someone to match with in the demo.
     seed_demo_network();
     return jid(trip);
+}
+
+impl get_my_trips() -> list[TripView] {
+    return [_trip_view(t) for t in [_me() ->:Posts:->][?:Trip] if t.active];
 }
 
 impl get_my_trip(trip_id: str) -> TripView | None {

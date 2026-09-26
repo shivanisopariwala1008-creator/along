@@ -9,10 +9,10 @@ Everything that touches personal data sits behind RequireAuth (login required).
 import from services.along {
     User, Trip, Location, RouteSegment, Preference, Match, Conversation, Message, Rating, ImpactRecord,
     get_my_profile, update_profile, update_profile_details, seed_demo_network, create_trip,
-    create_journey, get_my_trip, run_matching, get_match_results, get_match_details,
+    create_journey, get_my_trip, get_my_trips, run_matching, get_match_results, get_match_details,
     explain_match, get_match_graph, create_anonymous_connection, send_message,
     approve_identity_reveal, get_conversation, get_my_conversations, close_match,
-    complete_match, rate_match, get_impact_metrics,
+    complete_match, rate_match, get_impact_metrics, get_maps_config, get_trip_route,
 }
 
 cl {

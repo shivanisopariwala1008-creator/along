@@ -1,12 +1,56 @@
-"""MapCanvas — the Figma results map. Markers and the route are placed from
-real trip coordinates (projected into a box fitted around the journey); the
-road texture and traffic colours stay illustrative, as labelled."""
+"""MapCanvas — the results map. With a Google Maps key configured it renders
+real Google Maps (road routes + live traffic, see GoogleMapView); without one
+it falls back to the drawn Figma map below, where markers and the route are
+projected from real trip coordinates but the roads and traffic are illustrative."""
 
 import from .Icon { Icon }
+import from .GoogleMapView { GoogleMapView }
 import from ...lib.along { flow_info, map_bounds, project, pos_style, towns_in, fmt_time, when_text }
-sv import from ...services.along { TripView, MatchCardView }
+sv import from ...services.along { get_maps_config, get_trip_route, TripView, MatchCardView, RouteView, MapsConfigView }
 
 def:pub MapCanvas(
+    my_trip: TripView | None, cards: list[MatchCardView], selected: int,
+    onSelect: Callable[[int], None], kind: str = "ride"
+) -> JsxElement {
+    has config: MapsConfigView | None = None,
+        my_route: RouteView | None = None,
+        other_route: RouteView | None = None;
+
+    my_trip_id = my_trip.id if my_trip is not None else "";
+    focus = cards[selected] if selected < len(cards) else None;
+    other_trip_id = focus.other_trip.id if (focus is not None and focus.other_trip is not None) else "";
+
+    async can with entry {
+        config = await get_maps_config();
+    }
+
+    async can with [my_trip_id] entry {
+        if my_trip_id {
+            my_route = await get_trip_route(my_trip_id);
+        }
+    }
+
+    async can with [other_trip_id] entry {
+        other_route = None;
+        if other_trip_id {
+            other_route = await get_trip_route(other_trip_id);
+        }
+    }
+
+    if config is not None and config.api_key {
+        return <div className="map-canvas google">
+            <GoogleMapView
+                api_key={config.api_key} map_id={config.map_id} my_trip={my_trip}
+                my_route={my_route} other_route={other_route} cards={cards}
+                selected={selected} onSelect={onSelect} kind={kind}
+            />
+        </div>;
+    }
+    return <DrawnMap my_trip={my_trip} cards={cards} selected={selected} onSelect={onSelect} kind={kind} />;
+}
+
+# The Figma map drawn in SVG — used when no Google Maps key is configured.
+def:pub DrawnMap(
     my_trip: TripView | None, cards: list[MatchCardView], selected: int,
     onSelect: Callable[[int], None], kind: str = "ride"
 ) -> JsxElement {
