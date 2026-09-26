@@ -1,0 +1,9 @@
+# Python packages for running Along in production (e.g. on Render).
+# Versions match the local dev environment the app was tested with.
+jaclang==0.16.7
+jac-client==0.3.25
+jac-scale==0.2.31
+jac-super==0.1.22
+byllm==0.6.19
+pymongo==4.18.2
+certifi

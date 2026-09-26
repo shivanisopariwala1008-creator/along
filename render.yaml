@@ -1,0 +1,26 @@
+# Render Blueprint: deploys Along as one web service (Jac API + bundled client).
+# Render -> New -> Blueprint -> pick this repo. Secrets marked `sync: false`
+# are entered in the Render dashboard, never committed.
+services:
+  - type: web
+    name: along
+    runtime: python
+    plan: free
+    branch: main
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt && jac build main.jac
+    startCommand: jac start main.jac --port $PORT --host 0.0.0.0 < /dev/null
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.14.7
+      - key: MONGODB_URI          # your Atlas connection string
+        sync: false
+      - key: JWT_SECRET           # signs login tokens
+        generateValue: true
+      - key: ADMIN_PASSWORD       # built-in admin account (/admin)
+        generateValue: true
+      - key: GOOGLE_MAPS_API_KEY  # optional; without it the drawn map is used
+        sync: false
+      - key: OPENAI_API_KEY       # optional; AI-written match explanations
+        sync: false
