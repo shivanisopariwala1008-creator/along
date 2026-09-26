@@ -2,7 +2,7 @@
 either 'Find a Ride' (create a rider trip) or 'Offer a Ride' (driver trip),
 plus the demo-mode shortcuts a live hackathon judge needs."""
 
-import from "@jac/runtime" { Link, useNavigate }
+import from "@jac/runtime" { Link, useNavigate, jacIsLoggedIn, jacLogout }
 import from "@hugeicons/react" { HugeiconsIcon }
 import from "@hugeicons/core-free-icons" {
     ArrowRight01Icon, UserGroupIcon, Money03Icon, ShieldIcon, Route01Icon,
@@ -12,15 +12,44 @@ import from .ui.button { Button }
 import from .ui.card { Card, CardHeader, CardTitle, CardDescription, CardContent }
 import from .ui.badge { Badge }
 import from .BrandMark { BrandMark }
-sv import from ..services.along { seed_demo_network }
+sv import from ..services.along { seed_demo_network, get_my_profile, ProfileView }
 
 def:pub HomeDiscovery() -> JsxElement {
     has seeding: bool = False,
-        seeded: str = "";
+        seeded: str = "",
+        logged_in: bool = jacIsLoggedIn(),
+        my_name: str = "";
 
     nav = useNavigate();
 
+    async can with entry {
+        profile: ProfileView | None = None;
+        if logged_in {
+            try {
+                profile = await get_my_profile();
+                if profile {
+                    my_name = profile.display_name or profile.rider_handle;
+                }
+            } except Exception as e {
+                # Expired/invalid token: treat as logged out.
+                jacLogout();
+                logged_in = False;
+            }
+        }
+    }
+
+    def handle_logout(e: MouseEvent) {
+        jacLogout();
+        logged_in = False;
+        my_name = "";
+        seeded = "";
+    }
+
     async def handle_load_demo -> None {
+        if not logged_in {
+            nav("/login?next=%2F");
+            return;
+        }
         seeding = True;
         result = await seed_demo_network();
         seeded = result;
@@ -31,6 +60,10 @@ def:pub HomeDiscovery() -> JsxElement {
     def go_offer_ride(e: MouseEvent) { nav("/create-trip?role=DRIVER"); }
 
     async def handle_run_grand_blanc -> None {
+        if not logged_in {
+            nav("/login?next=%2F");
+            return;
+        }
         if not seeded {
             seeding = True;
             _ = await seed_demo_network();
@@ -48,10 +81,18 @@ def:pub HomeDiscovery() -> JsxElement {
                     <Link to="/impact" className="text-sm font-medium text-muted-foreground hover:text-foreground">Local Impact</Link>
                     <Link to="/trust-safety" className="text-sm font-medium text-muted-foreground hover:text-foreground">Trust &amp; Safety</Link>
                 </div>
-                <Button onClick={go_find_ride} className="shadow-sm">
-                    Find a Ride
-                    <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className="size-4" />
-                </Button>
+                {if logged_in {
+                    <div key="account" className="flex items-center gap-3">
+                        <span className="hidden text-sm text-muted-foreground sm:inline">{"Hi, " + (my_name or "there")}</span>
+                        <Link to="/matches" className="text-sm font-medium text-muted-foreground hover:text-foreground">My matches</Link>
+                        <Button variant="ghost" size="sm" onClick={handle_logout}>Log out</Button>
+                    </div>
+                } else {
+                    <div key="guest" className="flex items-center gap-2">
+                        <Link to="/login"><Button variant="ghost" size="sm">Log in</Button></Link>
+                        <Link to="/signup"><Button size="sm" className="shadow-sm">Sign up</Button></Link>
+                    </div>
+                }}
             </div>
         </nav>
 

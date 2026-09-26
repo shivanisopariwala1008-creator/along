@@ -6,6 +6,10 @@ and it only narrates numbers this file already produced.
 """
 
 import math;
+import random;
+import datetime;
+import from uuid { UUID }
+import from jaclang { JacRuntime as Jac }
 
 # ---------------------------------------------------------------------------
 # Deterministic helpers — CandidateDiscovery / RouteOverlap / Time / Pref / Cost
@@ -91,80 +95,112 @@ def _score_match(route_overlap: int, detour: int, time_score: int, pref_score: i
     return int(round(overall));
 }
 
+
 # ---------------------------------------------------------------------------
-# Shared-root helpers — this is a no-auth demo, so every seat lives under f"root"
+# Identity + sharing helpers
 # ---------------------------------------------------------------------------
 
-def _find_user(handle: str) -> User | None {
-    for u in [root-->][?:User] {
-        if u.anonymous_handle == handle {
-            return u;
-        }
-    }
-    return None;
+def _my_root_id() -> str {
+    return jid(root);
 }
 
-def _get_or_create_user(handle: str, display_name: str, verified: bool, home_region: str) -> User {
-    existing = _find_user(handle);
-    if existing != None {
-        return existing as User;
+# The caller's profile node, created on first use.
+def _me() -> User {
+    for u in [root-->][?:User] {
+        return u;
     }
-    user = User(
-        anonymous_handle=handle, display_name=display_name, verified=verified,
-        home_region=home_region, completed_connections=3, rating=4.8, trust_score=88
-    );
+    user = User(handle_number=random.randint(100, 999), completed_connections=0, trust_score=80);
     root ++> user;
     return user;
 }
 
+def _handle_for(me: User, role: str) -> str {
+    return ("Driver " if role == "DRIVER" else "Rider ") + str(me.handle_number);
+}
+
+def _now() -> str {
+    return datetime.datetime.now().strftime("%H:%M");
+}
+
+# Open one node to one other user. No-op for demo users and for yourself.
+def _share_with(target: any, other_root: str, level: any) -> None {
+    if other_root and other_root != "demo" and other_root != _my_root_id() {
+        Jac.allow_root(target, UUID(other_root), level);  # jac:ignore[E1053]
+    }
+}
+
+def _profile_view(me: User) -> ProfileView {
+    return ProfileView(
+        display_name=me.display_name, home_region=me.home_region,
+        rider_handle=_handle_for(me, "RIDER"), driver_handle=_handle_for(me, "DRIVER"),
+        verified=me.verified
+    );
+}
+
+impl get_my_profile() -> ProfileView {
+    return _profile_view(_me());
+}
+
+impl update_profile(display_name: str, home_region: str) -> ProfileView {
+    me = _me();
+    me.display_name = display_name.strip()[:60];
+    me.home_region = home_region.strip()[:60];
+    return _profile_view(me);
+}
+
+# ---------------------------------------------------------------------------
+# Trips — posted into root.shared so every logged-in user's matching sees them
+# ---------------------------------------------------------------------------
+
+def _public_trips() -> list[Trip] {
+    return [root.shared-->][?:Trip];
+}
+
 def _make_trip(
-    owner: User, role: str, origin_name: str, olat: float, olng: float,
+    owner_handle: str, owner_root: str, role: str, origin_name: str, olat: float, olng: float,
     destination_name: str, dlat: float, dlng: float, departure_time: str,
     arrival_deadline: str, recurring: bool, recurrence_days: str,
     flexible_minutes: int, seats_available: int, max_detour_minutes: int,
     smoking: bool, quiet_ride: bool, pets: bool, conversation_level: str, notes: str,
-    cost_share: float
+    cost_share: float, is_demo: bool, demo_name: str
 ) -> Trip {
     trip = Trip(
-        trip_type="commute", role=role, origin_name=origin_name, origin_lat=olat, origin_lng=olng,
+        trip_type="commute" if recurring else "one_time", role=role,
+        origin_name=origin_name, origin_lat=olat, origin_lng=olng,
         destination_name=destination_name, destination_lat=dlat, destination_lng=dlng,
         departure_time=departure_time, arrival_deadline=arrival_deadline, recurring=recurring,
         recurrence_days=recurrence_days, seats_available=seats_available, flexible_minutes=flexible_minutes,
         max_detour_minutes=max_detour_minutes, suggested_cost_share=cost_share, active=True,
-        luggage="light", notes=notes, owner_handle=owner.anonymous_handle
+        luggage="light", notes=notes, owner_handle=owner_handle, owner_root=owner_root,
+        is_demo=is_demo, demo_name=demo_name
     );
-    owner +>:Posts:+> trip;
-    root ++> trip;  # also index under root so matching/impact can find every trip
-    origin_loc = trip +>:StartsAt:+> Location(name=origin_name, latitude=olat, longitude=olng, city=origin_name);
-    dest_loc = trip +>:EndsAt:+> Location(name=destination_name, latitude=dlat, longitude=dlng, city=destination_name);
-    trip +>:HasPreference:+> Preference(
+    root.shared ++> trip;
+    grant(trip, level=ReadPerm);
+    pref = Preference(
         smoking=smoking, conversation_level=conversation_level, pets=pets,
         accessibility=False, quiet_ride=quiet_ride, luggage="light"
     );
+    trip +>:HasPreference:+> pref;
+    grant(pref, level=ReadPerm);
     return trip;
 }
 
-# ---------------------------------------------------------------------------
-# Demo seeding — Rider 184 / Driver 072 star match + weaker candidates
-# ---------------------------------------------------------------------------
-
 impl seed_demo_network() -> str {
-    if _find_user("Rider 184") != None {
-        return "Demo network already loaded.";
+    for t in _public_trips() {
+        if t.is_demo {
+            return "Demo network already loaded.";
+        }
     }
 
-    rider = _get_or_create_user("Rider 184", "Priya", False, "Grand Blanc, MI");
-    driver = _get_or_create_user("Driver 072", "Marcus", True, "Flint, MI");
-
     _make_trip(
-        rider, "RIDER", "Grand Blanc, MI", 42.9269, -83.6410, "Ann Arbor, MI", 42.2808, -83.7430,
+        "Rider 184", "demo", "RIDER", "Grand Blanc, MI", 42.9269, -83.6410, "Ann Arbor, MI", 42.2808, -83.7430,
         "07:35", "09:00", True, "Mon-Fri", 20, 0, 0, False, False, True, "moderate",
-        "Need to be at the office by 9am, flexible either way.", 40.0
+        "Need to be at the office by 9am, flexible either way.", 40.0, True, "Priya"
     );
     _make_trip(
-        driver, "DRIVER", "Flint, MI", 43.0125, -83.6875, "Ann Arbor, MI", 42.2808, -83.7430,
+        "Driver 072", "demo", "DRIVER", "Flint, MI", 43.0125, -83.6875, "Ann Arbor, MI", 42.2808, -83.7430,
         "07:40", "09:10", True, "Mon-Fri", 10, 2, 10, False, False, True, "moderate",
-        "Drive this route every weekday, happy to pick up on the way.", 10.0
+        "Drive this route every weekday, happy to pick up on the way.", 10.0, True, "Marcus"
     );
 
     weaker = [
@@ -182,12 +218,11 @@ impl seed_demo_network() -> str {
          "dest": "Ann Arbor, MI", "dlat": 42.2808, "dlng": -83.7430, "dep": "08:05", "arr": "08:55"},
     ];
     for w in weaker {
-        u = _get_or_create_user(w["handle"] as str, w["name"] as str, False, w["city"] as str);
         _make_trip(
-            u, "RIDER", w["city"] as str, w["lat"] as float, w["lng"] as float,
+            w["handle"] as str, "demo", "RIDER", w["city"] as str, w["lat"] as float, w["lng"] as float,
             w["dest"] as str, w["dlat"] as float, w["dlng"] as float,
             w["dep"] as str, w["arr"] as str, True, "Mon-Fri", 15, 0, 0, False, False, True,
-            "moderate", "Looking for a regular carpool.", 30.0
+            "moderate", "Looking for a regular carpool.", 30.0, True, w["name"] as str
         );
     }
 
@@ -209,36 +244,31 @@ def _town_coords(name: str) -> list[float] {
     return [42.7325, -84.5555];   # Michigan centroid fallback for unrecognized towns
 }
 
-# ---------------------------------------------------------------------------
-# create_trip — the user's own posted trip ("You")
-# ---------------------------------------------------------------------------
-
 impl create_trip(
     role: str, origin_name: str, destination_name: str, departure_time: str,
     arrival_deadline: str, recurring: bool, recurrence_days: str,
     flexible_minutes: int, seats_available: int, max_detour_minutes: int,
     smoking: bool, quiet_ride: bool, pets: bool, notes: str
 ) -> str {
-    you = _get_or_create_user("You", "You", False, origin_name);
-
+    me = _me();
+    clean_role = "DRIVER" if role == "DRIVER" else "RIDER";
     origin_coords = _town_coords(origin_name);
     dest_coords = _town_coords(destination_name);
-    olat = origin_coords[0];
-    olng = origin_coords[1];
-    dlat = dest_coords[0];
-    dlng = dest_coords[1];
 
     trip = _make_trip(
-        you, role, origin_name, olat, olng, destination_name, dlat, dlng,
+        _handle_for(me, clean_role), _my_root_id(), clean_role,
+        origin_name, origin_coords[0], origin_coords[1],
+        destination_name, dest_coords[0], dest_coords[1],
         departure_time, arrival_deadline, recurring, recurrence_days, flexible_minutes,
         seats_available, max_detour_minutes, smoking, quiet_ride, pets, "moderate", notes,
-        20.0 if role == "RIDER" else 8.0
+        20.0 if clean_role == "RIDER" else 8.0, False, ""
     );
+    me +>:Posts:+> trip;
     return jid(trip);
 }
 
 # ---------------------------------------------------------------------------
-# Matching walker — CandidateDiscovery + all scoring walkers, combined
+# Matching — candidates come from root.shared; each Match is opened to both sides
 # ---------------------------------------------------------------------------
 
 def _trip_view(t: Trip) -> TripView {
@@ -259,82 +289,54 @@ def _preference_of(t: Trip) -> Preference {
     return Preference();
 }
 
-def _match_to_card(m: Match) -> MatchCardView {
-    trips = [m ->:Connects:->][?:Trip];
-    driver_view: TripView | None = None;
-    rider_view: TripView | None = None;
-    for t in trips {
-        if t.role == "DRIVER" {
-            driver_view = _trip_view(t);
-        } else {
-            rider_view = _trip_view(t);
-        }
+def _load_trip(trip_id: str) -> Trip | None {
+    if not trip_id {
+        return None;
     }
+    try {
+        obj_ = jobj(trip_id);
+    } except Exception {
+        return None;
+    }
+    if isinstance(obj_, Trip) {
+        return obj_ as Trip;
+    }
+    return None;
+}
+
+def _is_participant(m: Match) -> bool {
+    me = _my_root_id();
+    return m.rider_root == me or m.driver_root == me;
+}
+
+def _my_matches() -> list[Match] {
+    return [m for m in [root.shared-->][?:Match] if _is_participant(m)];
+}
+
+# Resolve a match id — only if the caller is one of its two participants.
+def _find_match(match_id: str) -> Match | None {
+    try {
+        obj_ = jobj(match_id);
+    } except Exception {
+        return None;
+    }
+    if isinstance(obj_, Match) and _is_participant(obj_ as Match) {
+        return obj_ as Match;
+    }
+    return None;
+}
+
+def _match_to_card(m: Match) -> MatchCardView {
+    rider_trip = _load_trip(m.rider_trip_id);
+    driver_trip = _load_trip(m.driver_trip_id);
     return MatchCardView(
         id=jid(m), overall_score=m.overall_score, route_score=m.route_score, time_score=m.time_score,
         detour_minutes=m.detour_minutes, preference_score=m.preference_score,
         cost_benefit_score=m.cost_benefit_score, estimated_rider_savings=m.estimated_rider_savings,
-        status=m.status, driver_trip=driver_view, rider_trip=rider_view
+        status=m.status,
+        driver_trip=_trip_view(driver_trip) if driver_trip is not None else None,
+        rider_trip=_trip_view(rider_trip) if rider_trip is not None else None
     );
-}
-
-impl run_matching(trip_id: str) -> list[MatchCardView] {
-    try {
-        target = jobj(trip_id);
-    } except Exception {
-        return [];
-    }
-    if not isinstance(target, Trip) {
-        return [];
-    }
-    origin = target as Trip;
-    opposite_role = "DRIVER" if origin.role == "RIDER" else "RIDER";
-
-    # A. CandidateDiscoveryWalker step (simplified to a direct filter for reliability
-    #    in a live demo): active, opposite-role trips are the shortlist.
-    candidates = [t for t in [root-->][?:Trip] if t.active and t.role == opposite_role and jid(t) != trip_id];
-
-    rider = origin if origin.role == "RIDER" else None;
-    driver = origin if origin.role == "DRIVER" else None;
-
-    results: list[MatchCardView] = [];
-    for c in candidates {
-        rider_trip = rider if rider != None else c;
-        driver_trip = driver if driver != None else c;
-
-        # B. RouteOverlapWalker
-        route = _route_overlap(rider_trip, driver_trip);
-        # C. TimeCompatibilityWalker
-        time_score = _time_compat(rider_trip, driver_trip);
-        # D. PreferenceCompatibilityWalker
-        pref_score = _preference_compat(_preference_of(rider_trip), _preference_of(driver_trip));
-        # E. CostImpactWalker
-        cost = _cost_benefit(rider_trip, driver_trip, route["origin_gap"] as float, route["dest_gap"] as float);
-        # G. MatchScoringWalker
-        overall = _score_match(route["overlap"] as int, route["detour"] as int, time_score, pref_score, cost["score"] as int);
-
-        origin +>:CandidateMatch:+> c;
-
-        m = Match(
-            overall_score=overall, route_score=route["overlap"] as int, time_score=time_score,
-            detour_minutes=route["detour"] as int, preference_score=pref_score,
-            cost_benefit_score=cost["score"] as int, estimated_rider_savings=cost["rider_savings"] as float,
-            estimated_driver_contribution=cost["driver_contribution"] as float, status="suggested",
-            rider_handle=rider_trip.owner_handle, driver_handle=driver_trip.owner_handle
-        );
-        root ++> m;
-        m +>:Connects:+> rider_trip;
-        m +>:Connects:+> driver_trip;
-
-        results.append(_match_to_card(m));
-    }
-
-    return _sort_cards(results);
-}
-
-impl get_match_results() -> list[MatchCardView] {
-    matches = [root-->][?:Match];
-    return _sort_cards([_match_to_card(m) for m in matches]);
 }
 
 def _card_score(c: MatchCardView) -> int {
@@ -345,30 +347,94 @@ def _sort_cards(cards: list[MatchCardView]) -> list[MatchCardView] {
     return sorted(cards, key=_card_score, reverse=True);
 }
 
-def _find_match(match_id: str) -> Match | None {
-    try {
-        obj_ = jobj(match_id);
-    } except Exception {
-        return None;
+def _impact_record() -> ImpactRecord {
+    for rec in [root.shared-->][?:ImpactRecord] {
+        return rec;
     }
-    if isinstance(obj_, Match) {
-        return obj_ as Match;
+    rec = ImpactRecord();
+    root.shared ++> rec;
+    grant(rec, level=WritePerm);
+    return rec;
+}
+
+impl run_matching(trip_id: str) -> list[MatchCardView] {
+    origin = _load_trip(trip_id);
+    me = _my_root_id();
+    if origin is None or (origin as Trip).owner_root != me {
+        return [];   # you can only run matching for your own trip
     }
-    return None;
+    o = origin as Trip;
+    opposite_role = "DRIVER" if o.role == "RIDER" else "RIDER";
+
+    existing: dict[str, Match] = {};
+    for m in _my_matches() {
+        existing[m.rider_trip_id + ":" + m.driver_trip_id] = m;
+    }
+
+    # A. CandidateDiscovery: active, opposite-role trips from other users.
+    candidates = [
+        t for t in _public_trips()
+        if t.active and t.role == opposite_role and jid(t) != trip_id and t.owner_root != me
+    ];
+
+    results: list[MatchCardView] = [];
+    for c in candidates {
+        rider_trip = o if o.role == "RIDER" else c;
+        driver_trip = c if o.role == "RIDER" else o;
+        key = jid(rider_trip) + ":" + jid(driver_trip);
+        if key in existing {
+            results.append(_match_to_card(existing[key]));
+            continue;
+        }
+
+        # B-E. Route overlap, time, preference and cost scoring
+        route = _route_overlap(rider_trip, driver_trip);
+        time_score = _time_compat(rider_trip, driver_trip);
+        pref_score = _preference_compat(_preference_of(rider_trip), _preference_of(driver_trip));
+        cost = _cost_benefit(rider_trip, driver_trip, route["origin_gap"] as float, route["dest_gap"] as float);
+        # G. MatchScoring
+        overall = _score_match(route["overlap"] as int, route["detour"] as int, time_score, pref_score, cost["score"] as int);
+
+        m = Match(
+            overall_score=overall, route_score=route["overlap"] as int, time_score=time_score,
+            detour_minutes=route["detour"] as int, preference_score=pref_score,
+            cost_benefit_score=cost["score"] as int, estimated_rider_savings=cost["rider_savings"] as float,
+            estimated_driver_contribution=cost["driver_contribution"] as float, status="suggested",
+            rider_handle=rider_trip.owner_handle, driver_handle=driver_trip.owner_handle,
+            rider_trip_id=jid(rider_trip), driver_trip_id=jid(driver_trip),
+            rider_root=rider_trip.owner_root, driver_root=driver_trip.owner_root,
+            created_at=_now()
+        );
+        root.shared ++> m;
+        _share_with(m, c.owner_root, WritePerm);
+
+        rec = _impact_record();
+        rec.trips_matched += 1;
+        rec.estimated_savings += m.estimated_rider_savings;
+        rec.estimated_shared_miles += 38.5;
+
+        results.append(_match_to_card(m));
+    }
+
+    return _sort_cards(results);
+}
+
+impl get_match_results() -> list[MatchCardView] {
+    return _sort_cards([_match_to_card(m) for m in _my_matches()]);
 }
 
 impl get_match_details(match_id: str) -> MatchDetailView | None {
     m = _find_match(match_id);
-    if m == None {
+    if m is None {
         return None;
     }
-    card = _match_to_card(m as Match);
-    return MatchDetailView(card=card, explanation=(m as Match).explanation);
+    mt = m as Match;
+    return MatchDetailView(card=_match_to_card(mt), explanation=mt.explanation);
 }
 
 impl explain_match(match_id: str) -> str {
     m = _find_match(match_id);
-    if m == None {
+    if m is None {
         return "Match not found.";
     }
     mt = m as Match;
@@ -411,17 +477,13 @@ sem _narrate_match.estimated_weekly_savings = "Estimated weekly savings for the 
 
 impl get_match_graph(match_id: str) -> GraphView | None {
     m = _find_match(match_id);
-    if m == None {
+    if m is None {
         return None;
     }
     mt = m as Match;
-    trips = [mt ->:Connects:->][?:Trip];
-    rider_trip: Trip | None = None;
-    driver_trip: Trip | None = None;
-    for t in trips {
-        if t.role == "RIDER" { rider_trip = t; } else { driver_trip = t; }
-    }
-    if rider_trip == None or driver_trip == None {
+    rider_trip = _load_trip(mt.rider_trip_id);
+    driver_trip = _load_trip(mt.driver_trip_id);
+    if rider_trip is None or driver_trip is None {
         return None;
     }
     rt = rider_trip as Trip;
@@ -452,110 +514,146 @@ impl get_match_graph(match_id: str) -> GraphView | None {
 }
 
 # ---------------------------------------------------------------------------
-# Safety / Privacy — anonymous connection + mutual identity reveal
+# Safety / Privacy — anonymous chat between the two participants + mutual reveal
 # ---------------------------------------------------------------------------
 
-def _seed_chat(convo: Conversation, rider_handle: str, driver_handle: str, detour: int) -> None {
-    convo +>:Contains:+> Message(
-        sender_anonymous_handle=driver_handle,
-        body="Hi! I saw we have a similar route. I usually leave around " + "7:40 AM. Would arriving before 9 work for you?",
-        timestamp="07:41"
-    );
-    convo +>:Contains:+> Message(
-        sender_anonymous_handle=rider_handle,
-        body="Yes, that works. I need to reach my destination by 9.",
-        timestamp="07:42"
-    );
-    convo +>:Contains:+> Message(
-        sender_anonymous_handle=driver_handle,
-        body="I can make a small pickup detour. It should add about " + str(detour) + " minutes.",
-        timestamp="07:43"
-    );
-    convo +>:Contains:+> Message(
-        sender_anonymous_handle=rider_handle,
-        body="That sounds good. How many seats do you usually have?",
-        timestamp="07:44"
-    );
-    convo +>:Contains:+> Message(
-        sender_anonymous_handle=driver_handle,
-        body="Usually two.",
-        timestamp="07:45"
-    );
+def _my_role(m: Match) -> str {
+    return "RIDER" if m.rider_root == _my_root_id() else "DRIVER";
 }
 
-def _convo_view(match_id: str, convo: Conversation, rider_handle: str, driver_handle: str) -> ConversationView {
-    msgs = [convo ->:Contains:->][?:Message];
-    views = [MessageView(sender_anonymous_handle=x.sender_anonymous_handle, body=x.body, timestamp=x.timestamp) for x in msgs];
-    driver_name = "";
-    driver_verified = False;
-    if convo.identity_revealed {
-        driver_user = _find_user(driver_handle);
-        if driver_user != None {
-            driver_name = (driver_user as User).display_name;
-            driver_verified = (driver_user as User).verified;
-        }
-    }
-    return ConversationView(
-        match_id=match_id, status=convo.status, identity_revealed=convo.identity_revealed,
-        rider_approved=convo.rider_approved, driver_approved=convo.driver_approved, messages=views,
-        driver_display_name=driver_name, driver_verified=driver_verified, rider_display_name=""
-    );
+def _other_root(m: Match) -> str {
+    return m.driver_root if _my_role(m) == "RIDER" else m.rider_root;
 }
 
-def _find_conversation(match_id: str) -> Conversation | None {
-    m = _find_match(match_id);
-    if m == None {
-        return None;
-    }
-    convos = [(m as Match) ->:Opens:->][?:Conversation];
-    if len(convos) > 0 {
-        return convos[0];
+def _is_demo_match(m: Match) -> bool {
+    return _other_root(m) == "demo";
+}
+
+def _add_message(convo: Conversation, handle: str, sender_root: str, body: str, ts: str) -> None {
+    # Rebind (not append) so the field change is detected and persisted.
+    convo.messages = convo.messages + [{"handle": handle, "root": sender_root, "body": body, "ts": ts}];
+}
+
+# Only demo matches get a scripted opening — real matches start empty.
+def _seed_demo_chat(convo: Conversation, m: Match) -> None {
+    me = _my_root_id();
+    demo_handle = m.driver_handle if _my_role(m) == "RIDER" else m.rider_handle;
+    my_handle = m.rider_handle if _my_role(m) == "RIDER" else m.driver_handle;
+    _add_message(convo, demo_handle, "demo", "Hi! I saw we have a similar route. Would arriving before 9 work for you?", "07:41");
+    _add_message(convo, my_handle, me, "Yes, that works. I need to reach my destination by 9.", "07:42");
+    _add_message(convo, demo_handle, "demo", "I can make a small pickup detour. It should add about " + str(m.detour_minutes) + " minutes.", "07:43");
+}
+
+def _find_conversation(m: Match) -> Conversation | None {
+    for c in [m ->:Opens:->][?:Conversation] {
+        return c;
     }
     return None;
 }
 
+# Display name + verified flag of the other side — only once revealed.
+def _other_identity(m: Match, convo: Conversation) -> tuple[str, bool] {
+    if not convo.identity_revealed {
+        return ("", False);
+    }
+    if _is_demo_match(m) {
+        other_trip_id = m.driver_trip_id if _my_role(m) == "RIDER" else m.rider_trip_id;
+        other_trip = _load_trip(other_trip_id);
+        return ((other_trip as Trip).demo_name if other_trip is not None else "", False);
+    }
+    other_profile_id = convo.driver_profile_id if _my_role(m) == "RIDER" else convo.rider_profile_id;
+    try {
+        prof = jobj(other_profile_id);
+    } except Exception {
+        return ("", False);
+    }
+    if isinstance(prof, User) {
+        return ((prof as User).display_name, (prof as User).verified);
+    }
+    return ("", False);
+}
+
+def _convo_view(m: Match, convo: Conversation) -> ConversationView {
+    me = _my_root_id();
+    role = _my_role(m);
+    views = [
+        MessageView(
+            sender_anonymous_handle=x["handle"], body=x["body"],
+            timestamp=x["ts"], mine=x["root"] == me
+        ) for x in convo.messages
+    ];
+    identity = _other_identity(m, convo);
+    return ConversationView(
+        match_id=jid(m), status=convo.status, identity_revealed=convo.identity_revealed,
+        my_role=role,
+        my_handle=m.rider_handle if role == "RIDER" else m.driver_handle,
+        other_handle=m.driver_handle if role == "RIDER" else m.rider_handle,
+        me_approved=convo.rider_approved if role == "RIDER" else convo.driver_approved,
+        other_approved=convo.driver_approved if role == "RIDER" else convo.rider_approved,
+        messages=views, other_display_name=identity[0], other_verified=identity[1]
+    );
+}
+
 impl create_anonymous_connection(match_id: str) -> ConversationView | None {
     m = _find_match(match_id);
-    if m == None {
+    if m is None {
         return None;
     }
     mt = m as Match;
-    existing = _find_conversation(match_id);
-    if existing != None {
-        return _convo_view(match_id, existing as Conversation, mt.rider_handle, mt.driver_handle);
+    existing = _find_conversation(mt);
+    if existing is not None {
+        return _convo_view(mt, existing as Conversation);
     }
-    convo = Conversation(status="anonymous", identity_revealed=False, created_at="now");
+    convo = Conversation(status="anonymous", identity_revealed=False, created_at=_now());
     mt +>:Opens:+> convo;
-    _seed_chat(convo, mt.rider_handle, mt.driver_handle, mt.detour_minutes);
+    _share_with(convo, _other_root(mt), WritePerm);
+    if _is_demo_match(mt) {
+        _seed_demo_chat(convo, mt);
+    }
     mt.status = "connected";
-    return _convo_view(match_id, convo, mt.rider_handle, mt.driver_handle);
+    return _convo_view(mt, convo);
 }
 
-impl send_message(match_id: str, sender_anonymous_handle: str, body: str) -> ConversationView | None {
-    convo = _find_conversation(match_id);
+impl send_message(match_id: str, body: str) -> ConversationView | None {
     m = _find_match(match_id);
-    if convo == None or m == None {
+    if m is None {
         return None;
     }
-    clean = body.strip();
-    if clean {
-        (convo as Conversation) +>:Contains:+> Message(sender_anonymous_handle=sender_anonymous_handle, body=clean, timestamp="now");
-    }
     mt = m as Match;
-    return _convo_view(match_id, convo as Conversation, mt.rider_handle, mt.driver_handle);
+    convo = _find_conversation(mt);
+    if convo is None {
+        return None;
+    }
+    clean = body.strip()[:1000];
+    if clean {
+        handle = mt.rider_handle if _my_role(mt) == "RIDER" else mt.driver_handle;
+        _add_message(convo as Conversation, handle, _my_root_id(), clean, _now());
+    }
+    return _convo_view(mt, convo as Conversation);
 }
 
-impl approve_identity_reveal(match_id: str, approver: str) -> ConversationView | None {
-    convo = _find_conversation(match_id);
+impl approve_identity_reveal(match_id: str) -> ConversationView | None {
     m = _find_match(match_id);
-    if convo == None or m == None {
+    if m is None {
+        return None;
+    }
+    mt = m as Match;
+    convo = _find_conversation(mt);
+    if convo is None {
         return None;
     }
     c = convo as Conversation;
-    if approver == "rider" {
+    me = _me();
+    # Approving is what shares YOUR profile with the other participant.
+    _share_with(me, _other_root(mt), ReadPerm);
+    if _my_role(mt) == "RIDER" {
         c.rider_approved = True;
+        c.rider_profile_id = jid(me);
+        if _is_demo_match(mt) { c.driver_approved = True; }
     } else {
         c.driver_approved = True;
+        c.driver_profile_id = jid(me);
+        if _is_demo_match(mt) { c.rider_approved = True; }
     }
     if c.rider_approved and c.driver_approved {
         c.identity_revealed = True;
@@ -563,37 +661,41 @@ impl approve_identity_reveal(match_id: str, approver: str) -> ConversationView |
     } else {
         c.status = "pending_reveal";
     }
-    mt = m as Match;
-    return _convo_view(match_id, c, mt.rider_handle, mt.driver_handle);
+    return _convo_view(mt, c);
 }
 
 impl get_conversation(match_id: str) -> ConversationView | None {
-    convo = _find_conversation(match_id);
     m = _find_match(match_id);
-    if convo == None or m == None {
+    if m is None {
         return None;
     }
     mt = m as Match;
-    return _convo_view(match_id, convo as Conversation, mt.rider_handle, mt.driver_handle);
+    convo = _find_conversation(mt);
+    if convo is None {
+        return None;
+    }
+    return _convo_view(mt, convo as Conversation);
 }
 
 # ---------------------------------------------------------------------------
-# Local Impact dashboard
+# Local Impact dashboard — public aggregate counters
 # ---------------------------------------------------------------------------
 
 impl get_impact_metrics() -> ImpactView {
-    matches = [root-->][?:Match];
-    connected = [m for m in matches if m.status != "suggested"];
-    total_savings: float = 0.0;
-    for m in matches {
-        total_savings += m.estimated_rider_savings;
+    trips = _public_trips();
+    matched = 0;
+    savings: float = 0.0;
+    miles: float = 0.0;
+    for rec in [root.shared-->][?:ImpactRecord] {
+        matched = rec.trips_matched;
+        savings = rec.estimated_savings;
+        miles = rec.estimated_shared_miles;
     }
-    seats = sum([t.seats_available for t in [root-->][?:Trip] if t.role == "DRIVER"]);
-    cities = list(set([t.origin_name for t in [root-->][?:Trip]] + [t.destination_name for t in [root-->][?:Trip]]));
-    shared_miles: float = len(matches) * 38.5;
+    seats = sum([t.seats_available for t in trips if t.role == "DRIVER"]);
+    cities = sorted(list(set([t.origin_name for t in trips] + [t.destination_name for t in trips])));
     return ImpactView(
-        journeys_matched=len(matches), estimated_rider_savings=float(f"{total_savings:.2f}"),
-        empty_seats_activated=seats, shared_miles=float(f"{shared_miles:.1f}"),
+        journeys_matched=matched, estimated_rider_savings=float(f"{savings:.2f}"),
+        empty_seats_activated=seats, shared_miles=float(f"{miles:.1f}"),
         communities_connected=len(cities), cities=cities
     );
 }

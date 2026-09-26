@@ -1,8 +1,8 @@
-"""AnonymousChat — seeded thread + per-user identity-reveal approval. Both
-sides stay anonymous until BOTH approve; only then are names/verification
-revealed."""
+"""AnonymousChat — chat between the two participants of a match, plus mutual
+identity reveal. Both sides stay anonymous until BOTH approve; only then are
+names/verification revealed. The server decides which side the caller is."""
 
-import from "@jac/runtime" { Link, useParams }
+import from "@jac/runtime" { Link, useParams, useEffect, __jacClearCache }
 import from "@hugeicons/react" { HugeiconsIcon }
 import from "@hugeicons/core-free-icons" { ArrowLeft01Icon, ShieldIcon, SentIcon, CheckmarkCircle02Icon }
 import from .ui.button { Button }
@@ -10,7 +10,7 @@ import from .ui.input { Input }
 import from .ui.badge { Badge }
 import from .ui.avatar { Avatar, AvatarFallback }
 import from .BrandMark { BrandMark }
-sv import from ..services.along { create_anonymous_connection, send_message, approve_identity_reveal, ConversationView }
+sv import from ..services.along { create_anonymous_connection, send_message, approve_identity_reveal, get_conversation, ConversationView }
 
 def:pub AnonymousChat() -> JsxElement {
     params = useParams();
@@ -27,6 +27,25 @@ def:pub AnonymousChat() -> JsxElement {
         loading = False;
     }
 
+    # Poll for the other participant's messages / approval. Reader responses are
+    # cached client-side for 60s, so clear the cache before each refresh.
+    async def refresh -> None {
+        latest: ConversationView | None = None;
+        __jacClearCache();
+        latest = await get_conversation(match_id);
+        if latest {
+            convo = latest;
+        }
+    }
+
+    useEffect(lambda {
+        if not match_id {
+            return lambda { };
+        }
+        interval = setInterval(lambda { refresh(); }, 4000);  # jac:ignore[W2001]
+        return lambda { clearInterval(interval); };  # jac:ignore[W2001]
+    }, [match_id]);
+
     def handle_draft(e: ChangeEvent) { draft = e.target.value; }
 
     async def handle_send -> None {
@@ -35,12 +54,12 @@ def:pub AnonymousChat() -> JsxElement {
             return;
         }
         draft = "";
-        convo = await send_message(match_id, "You", text);
+        convo = await send_message(match_id, text);
     }
 
     async def handle_approve -> None {
         if match_id {
-            convo = await approve_identity_reveal(match_id, "rider");
+            convo = await approve_identity_reveal(match_id);
         }
     }
 
@@ -74,10 +93,10 @@ def:pub AnonymousChat() -> JsxElement {
         <div className="flex flex-1 flex-col gap-4 overflow-y-auto pt-6 pb-6 pl-6 pr-6">
             {if c {
                 for (i, msg) in enumerate(c.messages) {
-                    <div key={str(i)} className={"flex items-start gap-3 " + ("flex-row-reverse" if msg.sender_anonymous_handle == "You" else "")}>
+                    <div key={str(i)} className={"flex items-start gap-3 " + ("flex-row-reverse" if msg.mine else "")}>
                         <Avatar className="size-8 shrink-0"><AvatarFallback>{msg.sender_anonymous_handle[:1]}</AvatarFallback></Avatar>
-                        <div className={"flex max-w-md flex-col gap-1 rounded-2xl pt-2.5 pb-2.5 pl-3.5 pr-3.5 text-sm " + ("bg-primary text-primary-foreground" if msg.sender_anonymous_handle == "You" else "bg-muted")}>
-                            <span className="text-xs font-medium opacity-70">{msg.sender_anonymous_handle}</span>
+                        <div className={"flex max-w-md flex-col gap-1 rounded-2xl pt-2.5 pb-2.5 pl-3.5 pr-3.5 text-sm " + ("bg-primary text-primary-foreground" if msg.mine else "bg-muted")}>
+                            <span className="text-xs font-medium opacity-70">{("You" if msg.mine else msg.sender_anonymous_handle) + " · " + msg.timestamp}</span>
                             <span className="leading-relaxed">{msg.body}</span>
                         </div>
                     </div>
@@ -91,7 +110,7 @@ def:pub AnonymousChat() -> JsxElement {
                 {if cv.identity_revealed {
                     <div key="revealed" className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 pt-3 pb-3 pl-4 pr-4 text-sm text-emerald-900">
                         <HugeiconsIcon icon={CheckmarkCircle02Icon} strokeWidth={2} className="size-4" />
-                        <span>{"Mutual approval complete — " + (cv.driver_display_name or "your match") + (" (verified)" if cv.driver_verified else "") + " can now share contact details."}</span>
+                        <span>{"Mutual approval complete — you're connected with " + (cv.other_display_name or cv.other_handle) + (" (verified)" if cv.other_verified else "") + ". You can now share contact details."}</span>
                     </div>
                     skip;
                 }}
@@ -105,9 +124,9 @@ def:pub AnonymousChat() -> JsxElement {
                     </div>
                     <div className="flex items-center justify-between rounded-xl border pt-3 pb-3 pl-4 pr-4">
                         <span className="text-sm">
-                            {"You: " + ("approved" if cv.rider_approved else "not yet") + "  ·  Other user: " + ("approved" if cv.driver_approved else "waiting")}
+                            {"You (" + cv.my_handle + "): " + ("approved" if cv.me_approved else "not yet") + "  ·  " + cv.other_handle + ": " + ("approved" if cv.other_approved else "waiting")}
                         </span>
-                        <Button variant="outline" size="sm" onClick={handle_approve} disabled={cv.rider_approved}>
+                        <Button variant="outline" size="sm" onClick={handle_approve} disabled={cv.me_approved}>
                             I'm comfortable connecting
                         </Button>
                     </div>

@@ -1,12 +1,19 @@
 """ALONG — core mobility graph: nodes, edges, and every walker/endpoint.
 
+Data placement (multi-user, see `jac guide jac-sv-multi-user`):
+  - User (profile)      -> caller's private root; shared with a match partner
+                           only when that user approves the identity reveal.
+  - Trip, Preference    -> root.shared, readable by every logged-in user.
+  - Match, Conversation -> root.shared, opened to the two participants only.
+  - Message             -> owned by the sender, opened to the other participant.
+
 Graph shape:
   User -POSTS-> Trip -STARTS_AT-> Location
                      -ENDS_AT-> Location
                      -HAS_PREFERENCE-> Preference
                      -CANDIDATE_MATCH-> Trip
   User -PARTICIPATES_IN-> Match -CONNECTS-> Trip
-                          Match -OPENS-> Conversation -CONTAINS-> Message
+                          Match -OPENS-> Conversation (messages stored inline)
   User -APPROVES_IDENTITY_REVEAL-> Conversation
   Trip -CREATES_IMPACT-> ImpactRecord
 
@@ -32,7 +39,8 @@ node User {
         completed_connections: int = 0,
         home_region: str = "",
         identity_reveal_allowed: bool = False,
-        trust_score: int = 80;
+        trust_score: int = 80,
+        handle_number: int = 0;
 }
 
 node Trip {
@@ -55,7 +63,10 @@ node Trip {
         active: bool = True,
         luggage: str = "light",
         notes: str = "",
-        owner_handle: str = "";
+        owner_handle: str = "",
+        owner_root: str = "",        # jid of the poster's root; "demo" for seeded trips
+        is_demo: bool = False,
+        demo_name: str = "";         # display name revealed for seeded demo users
 }
 
 node Location {
@@ -91,6 +102,10 @@ node Match {
         explanation: str = "",
         rider_handle: str = "",
         driver_handle: str = "",
+        rider_trip_id: str = "",
+        driver_trip_id: str = "",
+        rider_root: str = "",
+        driver_root: str = "",
         created_at: str = "";
 }
 
@@ -99,11 +114,17 @@ node Conversation {
         identity_revealed: bool = False,
         rider_approved: bool = False,
         driver_approved: bool = False,
+        rider_profile_id: str = "",   # set when that side approves the reveal
+        driver_profile_id: str = "",
+        # Messages live on the conversation itself: both participants hold
+        # WritePerm on it, whereas attaching nodes to a node you don't own
+        # does not persist across users.
+        messages: list[dict[str, str]] = [],
         created_at: str = "";
 }
 
 node Message {
-    has sender_anonymous_handle: str = "", body: str = "", timestamp: str = "";
+    has sender_anonymous_handle: str = "", sender_root: str = "", body: str = "", timestamp: str = "";
 }
 
 node ImpactRecord {
@@ -166,15 +187,21 @@ obj GraphView {
 }
 
 obj MessageView {
-    has sender_anonymous_handle: str = "", body: str = "", timestamp: str = "";
+    has sender_anonymous_handle: str = "", body: str = "", timestamp: str = "", mine: bool = False;
 }
 
 obj ConversationView {
     has match_id: str = "", status: str = "", identity_revealed: bool = False,
-        rider_approved: bool = False, driver_approved: bool = False,
+        my_role: str = "",              # RIDER | DRIVER
+        my_handle: str = "", other_handle: str = "",
+        me_approved: bool = False, other_approved: bool = False,
         messages: list[MessageView] = [],
-        driver_display_name: str = "", driver_verified: bool = False,
-        rider_display_name: str = "";
+        other_display_name: str = "", other_verified: bool = False;
+}
+
+obj ProfileView {
+    has display_name: str = "", home_region: str = "", rider_handle: str = "",
+        driver_handle: str = "", verified: bool = False;
 }
 
 obj ImpactView {
@@ -187,31 +214,38 @@ obj ImpactView {
 # Public endpoints (implemented in along.impl.jac)
 # ---------------------------------------------------------------------------
 
-def:pub seed_demo_network() -> str;
+# Plain `def` = login required; each call runs on the caller's own root.
+# Only the aggregate impact numbers are public.
 
-def:pub create_trip(
+def get_my_profile() -> ProfileView;
+
+def update_profile(display_name: str, home_region: str) -> ProfileView;
+
+def seed_demo_network() -> str;
+
+def create_trip(
     role: str, origin_name: str, destination_name: str, departure_time: str,
     arrival_deadline: str, recurring: bool, recurrence_days: str,
     flexible_minutes: int, seats_available: int, max_detour_minutes: int,
     smoking: bool, quiet_ride: bool, pets: bool, notes: str
 ) -> str;
 
-def:pub run_matching(trip_id: str) -> list[MatchCardView];
+def run_matching(trip_id: str) -> list[MatchCardView];
 
-def:pub get_match_results() -> list[MatchCardView];
+def get_match_results() -> list[MatchCardView];
 
-def:pub get_match_details(match_id: str) -> MatchDetailView | None;
+def get_match_details(match_id: str) -> MatchDetailView | None;
 
-def:pub explain_match(match_id: str) -> str;
+def explain_match(match_id: str) -> str;
 
-def:pub get_match_graph(match_id: str) -> GraphView | None;
+def get_match_graph(match_id: str) -> GraphView | None;
 
-def:pub create_anonymous_connection(match_id: str) -> ConversationView | None;
+def create_anonymous_connection(match_id: str) -> ConversationView | None;
 
-def:pub send_message(match_id: str, sender_anonymous_handle: str, body: str) -> ConversationView | None;
+def send_message(match_id: str, body: str) -> ConversationView | None;
 
-def:pub approve_identity_reveal(match_id: str, approver: str) -> ConversationView | None;
+def approve_identity_reveal(match_id: str) -> ConversationView | None;
 
-def:pub get_conversation(match_id: str) -> ConversationView | None;
+def get_conversation(match_id: str) -> ConversationView | None;
 
 def:pub get_impact_metrics() -> ImpactView;
