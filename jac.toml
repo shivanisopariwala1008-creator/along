@@ -1,0 +1,28 @@
+[project]
+name = "mobile-starter"
+version = "0.0.1"
+description = "Mobile app starter - one Jac source, iOS + Android + web"
+entry-point = "main.jac"
+kind = "web-app"
+client_kind = "mobui"
+
+[client]
+
+[byllm]
+[byllm.model]
+default_model = "${LLM_MODEL:-gpt-4o-mini}"
+api_key = "${OPENAI_API_KEY:-}"
+
+
+[dependencies]
+[dependencies.npm]
+react = "^18.2.0"
+react-dom = "^18.2.0"
+react-native-web = "^0.19.13"
+
+[jacpack]
+name = 'along-journeys'
+description = 'Jac IDE snapshot for along-journeys'
+
+[jachammer]
+project_id = "prj_01b6686db5ee489ead1f1b6b77f242a1"
