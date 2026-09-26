@@ -12,11 +12,11 @@ import from .ui.field { Field, FieldLabel, FieldGroup }
 import from .ui.toggle_group { ToggleGroup, ToggleGroupItem }
 import from .ui.switch { Switch }
 import from .BrandMark { BrandMark }
-sv import from ..graph.along { create_trip }
+sv import from ..services.along { create_trip }
 
 def:pub CreateTrip() -> JsxElement {
     location = useLocation();
-    params: any = new(URLSearchParams, location.search);
+    params: any = new(URLSearchParams, location.search);  # jac:ignore[E1032,E1053]
     initial_role: str = (params.get("role") or "RIDER") as str;
 
     has role: str = initial_role,
@@ -169,7 +169,7 @@ def:pub CreateTrip() -> JsxElement {
                     <CardFooter className="flex justify-end gap-3">
                         <Button type="submit" disabled={submitting} className="shadow-sm">
                             <HugeiconsIcon icon={Route01Icon} strokeWidth={2} className="size-4" />
-                            {"Posting..." if submitting else "Post journey &amp; find matches"}
+                            {"Posting..." if submitting else "Post journey & find matches"}
                         </Button>
                     </CardFooter>
                 </Card>

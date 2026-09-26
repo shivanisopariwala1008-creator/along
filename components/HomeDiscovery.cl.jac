@@ -12,7 +12,7 @@ import from .ui.button { Button }
 import from .ui.card { Card, CardHeader, CardTitle, CardDescription, CardContent }
 import from .ui.badge { Badge }
 import from .BrandMark { BrandMark }
-sv import from ..graph.along { seed_demo_network }
+sv import from ..services.along { seed_demo_network }
 
 def:pub HomeDiscovery() -> JsxElement {
     has seeding: bool = False,

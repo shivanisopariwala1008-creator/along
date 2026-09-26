@@ -10,7 +10,7 @@ import from "@hugeicons/core-free-icons" {
 }
 import from .ui.card { Card, CardContent }
 import from .BrandMark { BrandMark }
-sv import from ..graph.along { run_matching }
+sv import from ..services.along { run_matching }
 
 glob STEPS: list[dict] = [
     {"label": "Discovering nearby journeys", "icon": Search01Icon},
@@ -24,7 +24,7 @@ glob STEPS: list[dict] = [
 
 def:pub MatchingAnimation() -> JsxElement {
     location = useLocation();
-    params: any = new(URLSearchParams, location.search);
+    params: any = new(URLSearchParams, location.search);  # jac:ignore[E1032,E1053]
     trip_id: str = (params.get("tripId") or "") as str;
 
     has active_step: int = 0,

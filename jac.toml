@@ -5,17 +5,17 @@ description = "Along — AI-powered peer-to-peer mobility matching for Michigan"
 entry-point = "main.jac"
 kind = "web-app"
 
-[client]
+[client.vite]
+plugins = ["tailwindcss()"]
+lib_imports = ["import tailwindcss from '@tailwindcss/vite'"]
 
 [serve]
 base_route_app = "app"
 
-[byllm]
 [byllm.model]
 default_model = "${LLM_MODEL:-gpt-4o-mini}"
 api_key = "${OPENAI_API_KEY:-}"
 
-[dependencies]
 [dependencies.npm]
 sonner = "*"
 shadcn = "^3.8.5"
@@ -29,10 +29,20 @@ radix-ui = "*"
 "@hugeicons/core-free-icons" = "*"
 react = "^18.2.0"
 react-dom = "^18.2.0"
+react-router-dom = "^6.22.0"
+react-error-boundary = "^5.0.0"
+react-hook-form = "^7.71.0"
+zod = "^4.3.6"
+"@hookform/resolvers" = "^5.2.2"
 
 [dependencies.npm.dev]
 tailwindcss = "latest"
 "@tailwindcss/vite" = "latest"
+vite = "^6.4.1"
+"@vitejs/plugin-react" = "^4.2.1"
+typescript = "^5.3.3"
+"@types/react" = "^18.2.0"
+"@types/react-dom" = "^18.2.0"
 
 [plugins.client.vite]
 plugins = ["tailwindcss()"]
@@ -46,16 +56,13 @@ font = "inter"
 radius = "large"
 menuAccent = "subtle"
 menuColor = "default"
+
 [scale.microservices]
 enabled = false
 
 [jacpack]
-name = 'along-journeys'
-description = 'Jac IDE snapshot for along-journeys'
+name = "along-journeys"
+description = "Jac IDE snapshot for along-journeys"
 
 [jachammer]
 project_id = "prj_01b6686db5ee489ead1f1b6b77f242a1"
-
-[client.vite]
-plugins = ["tailwindcss()"]
-lib_imports = ["import tailwindcss from '@tailwindcss/vite'"]

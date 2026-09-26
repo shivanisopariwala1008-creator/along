@@ -11,7 +11,7 @@ import from .ui.badge { Badge }
 import from .ui.skeleton { Skeleton }
 import from .ui.empty { Empty, EmptyHeader, EmptyMedia, EmptyTitle, EmptyDescription, EmptyContent }
 import from .BrandMark { BrandMark }
-sv import from ..graph.along { get_match_results, MatchCardView }
+sv import from ..services.along { get_match_results, MatchCardView }
 
 def:pub MatchResults() -> JsxElement {
     has matches: list[MatchCardView] = [],
@@ -44,7 +44,7 @@ def:pub MatchResults() -> JsxElement {
             </div>
 
             {if loading {
-                <div className="flex flex-col gap-4">
+                <div key="loading" className="flex flex-col gap-4">
                     <Skeleton className="h-40 w-full rounded-2xl" />
                     <Skeleton className="h-40 w-full rounded-2xl" />
                 </div>
@@ -52,7 +52,7 @@ def:pub MatchResults() -> JsxElement {
             }}
 
             {if not loading and len(matches) == 0 {
-                <Empty className="border border-dashed pt-12 pb-12">
+                <Empty key="empty" className="border border-dashed pt-12 pb-12">
                     <EmptyHeader>
                         <EmptyMedia variant="icon"><HugeiconsIcon icon={Route01Icon} strokeWidth={2} /></EmptyMedia>
                         <EmptyTitle>No matches yet</EmptyTitle>

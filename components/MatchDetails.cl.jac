@@ -11,7 +11,7 @@ import from .ui.card { Card, CardHeader, CardTitle, CardDescription, CardContent
 import from .ui.badge { Badge }
 import from .ui.skeleton { Skeleton }
 import from .BrandMark { BrandMark }
-sv import from ..graph.along { get_match_details, explain_match, MatchDetailView, MatchCardView }
+sv import from ..services.along { get_match_details, explain_match, MatchDetailView, MatchCardView }
 
 def:pub MatchDetails() -> JsxElement {
     params = useParams();
@@ -114,7 +114,7 @@ def:pub MatchDetails() -> JsxElement {
                 </CardHeader>
                 <CardContent>
                     {if explaining {
-                        <Skeleton className="h-16 w-full" />
+                        <Skeleton key="explaining" className="h-16 w-full" />
                         skip;
                     }}
                     <p className="text-sm leading-relaxed text-foreground">{explanation}</p>

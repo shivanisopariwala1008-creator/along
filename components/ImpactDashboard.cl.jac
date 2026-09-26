@@ -10,7 +10,7 @@ import from .ui.card { Card, CardHeader, CardTitle, CardDescription, CardContent
 import from .ui.badge { Badge }
 import from .ui.skeleton { Skeleton }
 import from .BrandMark { BrandMark }
-sv import from ..graph.along { get_impact_metrics, ImpactView }
+sv import from ..services.along { get_impact_metrics, ImpactView }
 
 def:pub ImpactDashboard() -> JsxElement {
     has metrics: ImpactView | None = None,

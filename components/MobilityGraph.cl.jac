@@ -7,7 +7,7 @@ import from "@hugeicons/core-free-icons" { ArrowLeft01Icon, ShareKnowledgeIcon }
 import from .ui.card { Card, CardHeader, CardTitle, CardDescription, CardContent }
 import from .ui.skeleton { Skeleton }
 import from .BrandMark { BrandMark }
-sv import from ..graph.along { get_match_graph, GraphView }
+sv import from ..services.along { get_match_graph, GraphView }
 
 def:pub MobilityGraph() -> JsxElement {
     params = useParams();

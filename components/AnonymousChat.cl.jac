@@ -10,7 +10,7 @@ import from .ui.input { Input }
 import from .ui.badge { Badge }
 import from .ui.avatar { Avatar, AvatarFallback }
 import from .BrandMark { BrandMark }
-sv import from ..graph.along { create_anonymous_connection, send_message, approve_identity_reveal, ConversationView }
+sv import from ..services.along { create_anonymous_connection, send_message, approve_identity_reveal, ConversationView }
 
 def:pub AnonymousChat() -> JsxElement {
     params = useParams();
@@ -73,8 +73,8 @@ def:pub AnonymousChat() -> JsxElement {
 
         <div className="flex flex-1 flex-col gap-4 overflow-y-auto pt-6 pb-6 pl-6 pr-6">
             {if c {
-                for msg in c.messages {
-                    <div key={msg.timestamp + msg.body[:8]} className={"flex items-start gap-3 " + ("flex-row-reverse" if msg.sender_anonymous_handle == "You" else "")}>
+                for (i, msg) in enumerate(c.messages) {
+                    <div key={str(i)} className={"flex items-start gap-3 " + ("flex-row-reverse" if msg.sender_anonymous_handle == "You" else "")}>
                         <Avatar className="size-8 shrink-0"><AvatarFallback>{msg.sender_anonymous_handle[:1]}</AvatarFallback></Avatar>
                         <div className={"flex max-w-md flex-col gap-1 rounded-2xl pt-2.5 pb-2.5 pl-3.5 pr-3.5 text-sm " + ("bg-primary text-primary-foreground" if msg.sender_anonymous_handle == "You" else "bg-muted")}>
                             <span className="text-xs font-medium opacity-70">{msg.sender_anonymous_handle}</span>
@@ -87,9 +87,9 @@ def:pub AnonymousChat() -> JsxElement {
 
         {if c {
             cv = c as ConversationView;
-            <div className="border-t pt-4 pb-4 pl-6 pr-6">
+            <div key="composer" className="border-t pt-4 pb-4 pl-6 pr-6">
                 {if cv.identity_revealed {
-                    <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 pt-3 pb-3 pl-4 pr-4 text-sm text-emerald-900">
+                    <div key="revealed" className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 pt-3 pb-3 pl-4 pr-4 text-sm text-emerald-900">
                         <HugeiconsIcon icon={CheckmarkCircle02Icon} strokeWidth={2} className="size-4" />
                         <span>{"Mutual approval complete — " + (cv.driver_display_name or "your match") + (" (verified)" if cv.driver_verified else "") + " can now share contact details."}</span>
                     </div>

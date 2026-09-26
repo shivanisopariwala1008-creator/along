@@ -109,10 +109,12 @@ def _get_or_create_user(handle: str, display_name: str, verified: bool, home_reg
     if existing != None {
         return existing as User;
     }
-    return (root ++> User(
+    user = User(
         anonymous_handle=handle, display_name=display_name, verified=verified,
         home_region=home_region, completed_connections=3, rating=4.8, trust_score=88
-    )) as User;
+    );
+    root ++> user;
+    return user;
 }
 
 def _make_trip(
@@ -123,14 +125,16 @@ def _make_trip(
     smoking: bool, quiet_ride: bool, pets: bool, conversation_level: str, notes: str,
     cost_share: float
 ) -> Trip {
-    trip = (owner +>:Posts:+> Trip(
+    trip = Trip(
         trip_type="commute", role=role, origin_name=origin_name, origin_lat=olat, origin_lng=olng,
         destination_name=destination_name, destination_lat=dlat, destination_lng=dlng,
         departure_time=departure_time, arrival_deadline=arrival_deadline, recurring=recurring,
         recurrence_days=recurrence_days, seats_available=seats_available, flexible_minutes=flexible_minutes,
         max_detour_minutes=max_detour_minutes, suggested_cost_share=cost_share, active=True,
         luggage="light", notes=notes, owner_handle=owner.anonymous_handle
-    )) as Trip;
+    );
+    owner +>:Posts:+> trip;
+    root ++> trip;  # also index under root so matching/impact can find every trip
     origin_loc = trip +>:StartsAt:+> Location(name=origin_name, latitude=olat, longitude=olng, city=origin_name);
     dest_loc = trip +>:EndsAt:+> Location(name=destination_name, latitude=dlat, longitude=dlng, city=destination_name);
     trip +>:HasPreference:+> Preference(
@@ -145,7 +149,7 @@ def _make_trip(
 # ---------------------------------------------------------------------------
 
 impl seed_demo_network() -> str {
-    if len([root-->][?:User]) > 0 {
+    if _find_user("Rider 184") != None {
         return "Demo network already loaded.";
     }
 
@@ -275,7 +279,11 @@ def _match_to_card(m: Match) -> MatchCardView {
 }
 
 impl run_matching(trip_id: str) -> list[MatchCardView] {
-    target = jobj(trip_id);
+    try {
+        target = jobj(trip_id);
+    } except Exception {
+        return [];
+    }
     if not isinstance(target, Trip) {
         return [];
     }
@@ -321,19 +329,28 @@ impl run_matching(trip_id: str) -> list[MatchCardView] {
         results.append(_match_to_card(m));
     }
 
-    results.sort(key=lambda (r: MatchCardView) { r.overall_score; }, reverse=True);
-    return results;
+    return _sort_cards(results);
 }
 
 impl get_match_results() -> list[MatchCardView] {
     matches = [root-->][?:Match];
-    cards = [_match_to_card(m) for m in matches];
-    cards.sort(key=lambda (c: MatchCardView) { c.overall_score; }, reverse=True);
-    return cards;
+    return _sort_cards([_match_to_card(m) for m in matches]);
+}
+
+def _card_score(c: MatchCardView) -> int {
+    return c.overall_score;
+}
+
+def _sort_cards(cards: list[MatchCardView]) -> list[MatchCardView] {
+    return sorted(cards, key=_card_score, reverse=True);
 }
 
 def _find_match(match_id: str) -> Match | None {
-    obj_ = jobj(match_id);
+    try {
+        obj_ = jobj(match_id);
+    } except Exception {
+        return None;
+    }
     if isinstance(obj_, Match) {
         return obj_ as Match;
     }
@@ -358,11 +375,20 @@ impl explain_match(match_id: str) -> str {
     if mt.explanation.strip() {
         return mt.explanation;
     }
-    text = _narrate_match(
-        mt.route_score, mt.time_score, mt.detour_minutes, mt.preference_score,
-        mt.cost_benefit_score, mt.overall_score, mt.rider_handle, mt.driver_handle,
-        mt.estimated_rider_savings
-    );
+    try {
+        text = _narrate_match(
+            mt.route_score, mt.time_score, mt.detour_minutes, mt.preference_score,
+            mt.cost_benefit_score, mt.overall_score, mt.rider_handle, mt.driver_handle,
+            mt.estimated_rider_savings
+        );
+    } except Exception {
+        # No LLM configured (e.g. OPENAI_API_KEY unset) — fall back to a template.
+        return (
+            f"{mt.rider_handle} and {mt.driver_handle} share {mt.route_score}% of their route "
+            f"with a {mt.detour_minutes}-minute detour and {mt.time_score}% schedule fit, "
+            f"saving {mt.rider_handle} about ${mt.estimated_rider_savings:.0f} a week."
+        );
+    }
     mt.explanation = text;
     return text;
 }
@@ -498,7 +524,8 @@ impl create_anonymous_connection(match_id: str) -> ConversationView | None {
     if existing != None {
         return _convo_view(match_id, existing as Conversation, mt.rider_handle, mt.driver_handle);
     }
-    convo = (mt +>:Opens:+> Conversation(status="anonymous", identity_revealed=False, created_at="now")) as Conversation;
+    convo = Conversation(status="anonymous", identity_revealed=False, created_at="now");
+    mt +>:Opens:+> convo;
     _seed_chat(convo, mt.rider_handle, mt.driver_handle, mt.detour_minutes);
     mt.status = "connected";
     return _convo_view(match_id, convo, mt.rider_handle, mt.driver_handle);
@@ -557,13 +584,16 @@ impl get_conversation(match_id: str) -> ConversationView | None {
 impl get_impact_metrics() -> ImpactView {
     matches = [root-->][?:Match];
     connected = [m for m in matches if m.status != "suggested"];
-    total_savings = sum([m.estimated_rider_savings for m in matches]) if len(matches) > 0 else 0.0;
+    total_savings: float = 0.0;
+    for m in matches {
+        total_savings += m.estimated_rider_savings;
+    }
     seats = sum([t.seats_available for t in [root-->][?:Trip] if t.role == "DRIVER"]);
     cities = list(set([t.origin_name for t in [root-->][?:Trip]] + [t.destination_name for t in [root-->][?:Trip]]));
-    shared_miles = float(len(matches)) * 38.5;
+    shared_miles: float = len(matches) * 38.5;
     return ImpactView(
-        journeys_matched=len(matches), estimated_rider_savings=round(total_savings, 2),
-        empty_seats_activated=seats, shared_miles=round(shared_miles, 1),
+        journeys_matched=len(matches), estimated_rider_savings=float(f"{total_savings:.2f}"),
+        empty_seats_activated=seats, shared_miles=float(f"{shared_miles:.1f}"),
         communities_connected=len(cities), cities=cities
     );
 }
