@@ -7,3 +7,5 @@ jac-super==0.1.22
 byllm==0.6.19
 pymongo==4.18.2
 certifi
+# jaclang needs the llvmlite API it was built against; 0.49 renamed a pipeline option.
+llvmlite==0.47.0
