@@ -4,8 +4,15 @@ jaclang==0.16.7
 jac-client==0.3.25
 jac-scale==0.2.31
 jac-super==0.1.22
-byllm==0.6.19
 pymongo==4.18.2
 certifi
+# jac-scale imports these without declaring them (they used to arrive via byllm).
+requests
+redis
 # jaclang needs the llvmlite API it was built against; 0.49 renamed a pipeline option.
 llvmlite==0.47.0
+
+# Optional: AI-written match explanations (needs OPENAI_API_KEY). Left out by
+# default because byllm pulls in litellm (~150 MB RAM), which alone breaks
+# the 512 MB limit on Render's free/starter plans. Uncomment on bigger hosts.
+# byllm==0.6.19

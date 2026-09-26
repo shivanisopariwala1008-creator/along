@@ -21,9 +21,6 @@ Deterministic scoring lives in along.impl.jac; the LLM only narrates a
 match that has already been scored — it never invents a number.
 """
 
-import from byllm.lib { Model }
-
-glob explain_llm: Model = Model(model_name="gpt-4o-mini");
 
 # ---------------------------------------------------------------------------
 # Nodes

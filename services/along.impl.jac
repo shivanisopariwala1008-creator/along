@@ -806,8 +806,15 @@ impl explain_match(match_id: str) -> str {
     if mt.explanation.strip() {
         return mt.explanation;
     }
+    # The LLM stack (byllm/litellm) costs ~150 MB of RAM, so it is only
+    # imported when a key is configured; otherwise use the template below.
+    has_key = bool(os.environ.get("OPENAI_API_KEY", "").strip());
     try {
-        text = _narrate_match(
+        if not has_key {
+            raise RuntimeError("no LLM key configured");
+        }
+        import from services.narrate { narrate_match }
+        text = narrate_match(
             mt.route_score, mt.time_score, mt.detour_minutes, mt.preference_score,
             mt.cost_benefit_score, mt.overall_score, mt.rider_handle, mt.driver_handle,
             mt.estimated_rider_savings
@@ -824,21 +831,6 @@ impl explain_match(match_id: str) -> str {
     return text;
 }
 
-def _narrate_match(
-    route_score: int, time_score: int, detour_minutes: int, preference_score: int,
-    cost_benefit_score: int, overall_score: int, rider_handle: str, driver_handle: str,
-    estimated_weekly_savings: float
-) -> str by explain_llm();
-sem _narrate_match = "Write ONE short, warm, human-friendly paragraph (2-3 sentences) explaining why these two anonymous commuters are a good rideshare match. Use ONLY the numbers given — never invent a route detail, address, or statistic not passed in. Refer to them only by their anonymous handles, never assume real names.";
-sem _narrate_match.route_score = "Percent overlap between the two commute routes (0-100).";
-sem _narrate_match.time_score = "Schedule compatibility score (0-100).";
-sem _narrate_match.detour_minutes = "Extra minutes the driver detours to pick up the rider.";
-sem _narrate_match.preference_score = "Ride preference compatibility score (0-100).";
-sem _narrate_match.cost_benefit_score = "Cost-benefit score (0-100).";
-sem _narrate_match.overall_score = "Final weighted match score (0-100).";
-sem _narrate_match.rider_handle = "The rider's anonymous handle.";
-sem _narrate_match.driver_handle = "The driver's anonymous handle.";
-sem _narrate_match.estimated_weekly_savings = "Estimated weekly savings for the rider in US dollars, already computed.";
 
 impl get_match_graph(match_id: str) -> GraphView | None {
     m = _find_match(match_id);

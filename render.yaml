@@ -1,4 +1,11 @@
-# Render Blueprint: deploys Along as one web service (Jac API + bundled client).
+# Render Blueprint: Along as two services.
+#
+#   along      Jac API server (Python). Runs with --no_client so it never
+#              bundles the frontend at startup — that Vite build needs ~1.5 GB
+#              and would blow the 512 MB free-plan limit. Steady state ~180 MB.
+#   along-web  The frontend, built once as static files and served free from
+#              Render's CDN. It calls the API at the along service's URL.
+#
 # Render -> New -> Blueprint -> pick this repo. Secrets marked `sync: false`
 # are entered in the Render dashboard, never committed.
 services:
@@ -8,19 +15,48 @@ services:
     plan: free
     branch: main
     autoDeploy: true
-    buildCommand: pip install -r requirements.txt && jac build main.jac
-    startCommand: jac start main.jac --port $PORT --host 0.0.0.0 < /dev/null
+    # `--faux` compiles every Jac module once so startup reuses the cache
+    # (cold compile peaks ~700 MB). It exits non-zero after printing on this
+    # jac-scale version, which is harmless, hence `|| true`.
+    buildCommand: >-
+      pip install -r requirements.txt &&
+      (jac start main.jac --faux --no_client < /dev/null || true)
+    startCommand: jac start main.jac --port $PORT --host 0.0.0.0 --no_client < /dev/null
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.14.7
-      - key: MONGODB_URI          # your Atlas connection string
+      - key: XDG_CACHE_HOME         # keep Jac's compile cache inside the deployed project
+        value: /opt/render/project/src/.cache
+      - key: MONGODB_URI            # your Atlas connection string
         sync: false
-      - key: JWT_SECRET           # signs login tokens
+      - key: JWT_SECRET             # signs login tokens
         generateValue: true
-      - key: ADMIN_PASSWORD       # built-in admin account (/admin)
+      - key: ADMIN_PASSWORD         # built-in admin account (/admin)
         generateValue: true
-      - key: GOOGLE_MAPS_API_KEY  # optional; without it the drawn map is used
+      - key: GOOGLE_MAPS_API_KEY    # optional; without it the drawn map is used
         sync: false
-      - key: OPENAI_API_KEY       # optional; AI-written match explanations
+      - key: OPENAI_API_KEY         # optional; also uncomment byllm in requirements.txt
         sync: false
+
+  - type: web
+    name: along-web
+    runtime: static
+    branch: main
+    autoDeploy: true
+    buildCommand: >-
+      pip install -r requirements.txt &&
+      JAC_CLIENT_API_BASE_URL=https://$API_HOST jac build main.jac --client static < /dev/null
+    staticPublishPath: .jac/client/dist
+    routes:
+      - type: rewrite               # client-side routes (/chat, /matches/...) all load the app
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.14.7
+      - key: API_HOST
+        fromService:
+          name: along
+          type: web
+          property: host
