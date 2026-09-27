@@ -1,4 +1,4 @@
-# Python packages for running Along in production (e.g. on Render).
+# Python packages for running Along in production (deployed on Jac Hammer).
 # Versions match the local dev environment the app was tested with.
 jaclang==0.16.7
 jac-client==0.3.25
@@ -13,6 +13,6 @@ redis
 llvmlite==0.47.0
 
 # Optional: AI-written match explanations (needs OPENAI_API_KEY). Left out by
-# default because byllm pulls in litellm (~150 MB RAM), which alone breaks
-# the 512 MB limit on Render's free/starter plans. Uncomment on bigger hosts.
+# default because byllm pulls in litellm (~150 MB RAM), which makes the server
+# much heavier. Uncomment if you need it and your host has the memory.
 # byllm==0.6.19

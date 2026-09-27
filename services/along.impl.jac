@@ -2000,7 +2000,7 @@ impl mark_notifications_read(ids: list[str]) -> int {
 # Trip assistant — plain English -> journey draft
 #
 # Gemini is called directly over REST (no byllm/litellm), which keeps the
-# server small enough for Render's free plan. With no key, or if Gemini
+# server small and fast to deploy. With no key, or if Gemini
 # fails, a rule-based reader handles common phrasings, so it never breaks.
 # ---------------------------------------------------------------------------
 
