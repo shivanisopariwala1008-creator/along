@@ -31,6 +31,7 @@ cl {
     import from .components.along.TravelerProfile { TravelerProfileRoute }
     import from .components.along.RelayPlanPage { RelayPlanRoute }
     import from .components.along.ShareTrip { SharedTripPage }
+    import from .components.along.DemoPage { DemoPage }
     import from .components.along.AccountPages { ForgotPasswordPage, ResetPasswordPage, VerifyEmailPage }
     import from .components.along.ProfilePage { ProfilePage }
     import from .components.along.Redirects { LegacyCreateTrip, LegacyMatching }
@@ -49,6 +50,7 @@ cl {
                 <Route path="/trust-safety" element={<TrustSafety />} />
                 <Route path="/impact" element={<ImpactDashboard />} />
                 <Route path="/share/:token" element={<SharedTripPage />} />
+                <Route path="/demo" element={<DemoPage />} />
                 <Route path="/forgot-password" element={<ForgotPasswordPage />} />
                 <Route path="/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/verify-email" element={<VerifyEmailPage />} />

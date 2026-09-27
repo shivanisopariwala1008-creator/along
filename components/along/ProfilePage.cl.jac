@@ -80,12 +80,8 @@ def:pub ProfilePage() -> JsxElement {
             error = "Please enter your name.";
             return;
         }
-        if not (13 <= parse_age(age_draft) <= 120) {
-            error = "Please enter your age (13 or older).";
-            return;
-        }
-        if not gender_draft {
-            error = "Please choose your gender.";
+        if age_draft.strip() and not (13 <= parse_age(age_draft) <= 120) {
+            error = "Please enter an age of 13 or older, or leave it blank.";
             return;
         }
         saving = True;
@@ -153,14 +149,14 @@ def:pub ProfilePage() -> JsxElement {
                                 <div><input type="tel" value={phone_draft} onChange={lambda (e: ChangeEvent) { phone_draft = e.target.value; }} placeholder="(810) 555-0148" autoComplete="tel" /></div>
                             </label>
                             <label className="field">
-                                <span>Age</span>
+                                <span>Age <em>Optional</em></span>
                                 <div><input type="number" min="1" max="120" value={age_draft} onChange={lambda (e: ChangeEvent) { age_draft = e.target.value; }} placeholder="e.g. 28" /></div>
                             </label>
                             <label className="field">
-                                <span>Gender</span>
+                                <span>Gender <em>Optional</em></span>
                                 <div>
                                     <select value={gender_draft} onChange={lambda (e: ChangeEvent) { gender_draft = e.target.value; }}>
-                                        <option value="" disabled>Choose…</option>
+                                        <option value="">Prefer not to say</option>
                                         <option value="woman">Woman</option>
                                         <option value="man">Man</option>
                                         <option value="non-binary">Non-binary</option>
@@ -168,7 +164,7 @@ def:pub ProfilePage() -> JsxElement {
                                     <Icon name="chevron" />
                                 </div>
                             </label>
-                            <p className="edit-hint">Age and gender are only used for matching preferences. They’re never shown on your profile.</p>
+                            <p className="edit-hint">Add your age and gender so travelers who set age or gender preferences can match with you. They’re never shown on your profile.</p>
                             {error and <p className="form-error">{error}</p>}
                             <div className="edit-actions">
                                 <button className="btn btn-secondary" onClick={lambda (e: MouseEvent) { editing = False; }}>Cancel</button>
