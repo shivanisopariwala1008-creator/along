@@ -12,6 +12,7 @@ Feature coverage (each has at least one live example):
     declined/closed, completed and rated by both sides
   - reputation: rated travelers with reviews, plus brand-new ones (no ratings)
   - a 2-ride relay: zoe (Grand Blanc -> Novi) via priya, then noah
+  - the demo network (services/demo_network.jac): ~270 sample journeys
 
 `greet`: post a journey from your own account first, then run this — each test
 user whose route fits yours opens a conversation with you and says hello.
@@ -48,6 +49,15 @@ def peer(mode: str, frm: str, dest: str, pref: str, time: str, people: int = 1, 
     return {"mode": mode, "role": "PEER", "from": frm, "to": dest, "pref": pref, "time": time, "recurring": False,
             "seats": 0, "people": people, "vehicle": vehicle, "moving": moving, "round_trip": round_trip};
 }
+
+# Everyone has an age and gender (required at signup; used only for matching).
+glob BASICS: dict[str, list] = {
+    "priya": [29, "woman"], "dana": [41, "woman"], "omar": [35, "man"], "grace": [27, "woman"],
+    "noah": [38, "man"], "marcus": [24, "man"], "aisha": [31, "woman"], "ben": [22, "man"],
+    "lena": [45, "woman"], "zoe": [26, "woman"], "riley": [33, "non-binary"], "kevin": [28, "man"],
+    "sofia": [36, "woman"], "tom": [52, "man"], "jordan": [30, "non-binary"], "sam": [25, "man"],
+    "mia": [34, "woman"], "ethan": [47, "man"]
+};
 
 # The first six keep the accounts/journeys earlier versions of this script made.
 glob PEOPLE: list[dict] = [
@@ -208,7 +218,8 @@ def ensure_trip(p: dict, token: str) -> dict {
         "moving_help": t.get("moving", False), "age_pref": "No preference",
         "gender_pref": "No preference", "notes": SEED_NOTE,
         "origin_lat": 0.0, "origin_lng": 0.0, "destination_lat": 0.0, "destination_lng": 0.0,
-        "round_trip": t.get("round_trip", False)
+        "round_trip": t.get("round_trip", False), "return_date": "", "space_needed": "",
+        "age_min": 1, "age_max": 100, "gender_prefs": []
     });
     return fn("get_my_trip", token, {"trip_id": trip_id}) as dict;
 }
@@ -217,7 +228,11 @@ def setup_people() -> dict {
     people: dict = {};
     for p in PEOPLE {
         (token, created) = ensure_account(p);
-        fn("update_profile_details", token, {"display_name": p["name"], "home_region": p["area"], "phone": p["phone"]});
+        basics = BASICS[p["key"]];
+        fn("update_profile_details", token, {
+            "display_name": p["name"], "home_region": p["area"], "phone": p["phone"],
+            "age": basics[0], "gender": basics[1]
+        });
         profile = fn("get_my_profile", token, {});
         trip = ensure_trip(p, token);
         people[p["key"]] = {**p, "token": token, "trip": trip, "profile": profile};
@@ -297,6 +312,8 @@ with entry:__main__ {
     mode = sys.argv[-1] if len(sys.argv) > 1 and sys.argv[-1] in ["greet"] else "seed";
     print(f"Along test users -> {API}");
     people = setup_people();
+    # ~270 sample journeys (drivers, riders, rentals, cabs) so every search has matches.
+    print("  " + str(fn("seed_demo_network", people["priya"]["token"], {})));
     if mode == "greet" {
         print("Greeting your matches:");
         greet(people);

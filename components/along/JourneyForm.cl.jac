@@ -23,8 +23,7 @@ glob VEHICLES: list[list[str]] = [
 glob SPACE_OPTIONS: list[str] = ["A few boxes", "Boxes + small furniture", "One room", "Studio / 1-bedroom", "2+ bedrooms"];
 
 glob DISTANCES: list[str] = ["Up to 2 miles", "Up to 5 miles", "Up to 10 miles"],
-     GENDERS: list[list[str]] = [["woman", "Women"], ["man", "Men"], ["non-binary", "Non-binary"]],
-     PETS: list[list[str]] = [["any", "No preference"], ["bringing", "I’m bringing a pet"], ["none", "No pets, please"]];
+     GENDERS: list[list[str]] = [["woman", "Women"], ["man", "Men"], ["non-binary", "Non-binary"]];
 
 # Route wrapper: keying on the journey type resets the form when switching types.
 def:pub JourneyRoute() -> JsxElement {
@@ -68,7 +67,6 @@ def:pub JourneyForm(kind: str) -> JsxElement {
         age_min: int = 1,
         age_max: int = 100,
         gender_prefs: list[str] = [],
-        pets_pref: str = "any",
         submitting: bool = False,
         error: str = "";
 
@@ -226,7 +224,7 @@ def:pub JourneyForm(kind: str) -> JsxElement {
                 pickup_distance, vehicle, moving_help, age_pref, gender_pref, notes,
                 origin_lat, origin_lng, destination_lat, destination_lng,
                 round_trip and kind != "rental", return_date, space_needed,
-                age_min, age_max, gender_prefs, pets_pref
+                age_min, age_max, gender_prefs
             );
             nav("/results?tripId=" + trip_id);
         } except Exception as ex {
@@ -402,21 +400,9 @@ def:pub JourneyForm(kind: str) -> JsxElement {
                             }}
                         </div>
                     </div>
-                    <div className="pref-block">
-                        <div className="pref-head"><span className="pref-label">Pets</span></div>
-                        <div className="segmented" role="radiogroup" aria-label="Pets">
-                            {for pt in PETS {
-                                <button
-                                    key={pt[0]} type="button" role="radio" aria-checked={pets_pref == pt[0]}
-                                    className={"seg" + (" on" if pets_pref == pt[0] else "")}
-                                    onClick={lambda (e: MouseEvent) { pets_pref = pt[0]; }}
-                                >{pt[1]}</button>
-                            }}
-                        </div>
-                    </div>
                     <div className="privacy-note">
                         <Icon name="shield" />
-                        <span><strong>Your privacy comes first</strong><small>Add your own age and gender in your profile so others’ preferences can include you — they’re only used for matching and never shown.</small></span>
+                        <span><strong>Your privacy comes first</strong><small>Everyone’s age and gender are used only for matching — they’re never shown on profiles.</small></span>
                     </div>
                 </section>
 

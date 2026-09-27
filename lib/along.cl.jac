@@ -159,6 +159,20 @@ def:pub plural(n: int, one: str, many: str) -> str {
 }
 
 # "MapleDriver" -> "MD", "Rider 184" -> "R1", "Alex Kim" -> "AK"
+# A whole-number age typed into a form, or 0 if it isn't one.
+def:pub parse_age(text: str) -> int {
+    clean = text.strip();
+    if not clean or len(clean) > 3 {
+        return 0;
+    }
+    for ch in clean {
+        if ch < "0" or ch > "9" {
+            return 0;
+        }
+    }
+    return int(clean);
+}
+
 def:pub initials(name: str) -> str {
     clean = (name or "").strip();
     if not clean {

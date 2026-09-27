@@ -88,7 +88,6 @@ node Trip {
         age_min: int = 1,
         age_max: int = 100,                   # 100 means "100+"
         gender_prefs: list[str] = [],         # empty = anyone
-        pets_pref: str = "any",               # any | bringing | none
         # Snapshot of the poster's own age/gender, used ONLY by the matcher to
         # honour other people's preferences. Never sent to any client.
         owner_age: int = 0,
@@ -262,7 +261,7 @@ obj TripView {
         destination_lat: float = 0.0, destination_lng: float = 0.0,
         owner_rating: float = 0.0, owner_reviews: int = 0, round_trip: bool = False,
         return_date: str = "", space_needed: str = "",
-        age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = [], pets_pref: str = "any";
+        age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = [];
 }
 
 # A place that rents cars near a pickup point (Google Places).
@@ -561,7 +560,7 @@ def create_journey(
     origin_lat: float = 0.0, origin_lng: float = 0.0,
     destination_lat: float = 0.0, destination_lng: float = 0.0,
     round_trip: bool = False, return_date: str = "", space_needed: str = "",
-    age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = [], pets_pref: str = "any"
+    age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = []
 ) -> str;
 
 # Car-rental counters near a point, nearest first (needs a Google Maps key).

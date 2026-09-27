@@ -4,12 +4,14 @@ journey types, conversations, and the profile avatar (or log in / sign up)."""
 import from "@jac/runtime" { useNavigate, jacIsLoggedIn, jacLogout, __jacClearCache }
 import from react { useEffect }
 import from .Icon { Icon }
+import from .ProfileGate { ProfileGate }
 import from ...lib.along { flow_keys, flow_info, initials, time_ago }
 sv import from ...services.along { get_my_profile, get_my_notifications, mark_notifications_read, ProfileView, NotificationView }
 
 def:pub AppHeader(progress: bool = False) -> JsxElement {
     has menu_open: bool = False,
         avatar: str = "",
+        me: ProfileView | None = None,
         logged_in: bool = jacIsLoggedIn();
 
     nav = useNavigate();
@@ -25,6 +27,7 @@ def:pub AppHeader(progress: bool = False) -> JsxElement {
                 profile: ProfileView | None = await get_my_profile();
                 if profile {
                     avatar = initials(profile.display_name or profile.rider_handle);
+                    me = profile;
                 }
             } except Exception as e {
                 # Only an explicit auth rejection ends the session; a blip
@@ -52,7 +55,11 @@ def:pub AppHeader(progress: bool = False) -> JsxElement {
         nav("/");
     }
 
-    return <header className="topbar">
+    needs_basics: bool = logged_in and me is not None and (me.age == 0 or not me.gender);
+
+    return <>
+    {needs_basics and <ProfileGate profile={me as ProfileView} onDone={lambda { me = None; }} />}
+    <header className="topbar">
         <button className="brand" onClick={lambda (e: MouseEvent) { go("/"); }} aria-label="Along home">
             <span className="brand-mark"><span /></span>
             <span>Along</span>
@@ -95,7 +102,8 @@ def:pub AppHeader(progress: bool = False) -> JsxElement {
             </div>
         }}
         {progress and <div className="progress-line" />}
-    </header>;
+    </header>
+    </>;
 }
 
 # Header bell: unread count + dropdown of Matchmaker matches and new messages.

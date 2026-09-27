@@ -42,9 +42,45 @@ def _minutes_of_day(hhmm: str) -> int {
     }
 }
 
+# How well two journeys point the same way: 1 = same heading, -1 = opposite.
+# Very short hops have no meaningful heading, so they count as aligned.
+def _heading_cos(a: Trip, b: Trip) -> float {
+    mid = math.radians((a.origin_lat + b.origin_lat) / 2.0);
+    ax = (a.destination_lng - a.origin_lng) * math.cos(mid);
+    ay = a.destination_lat - a.origin_lat;
+    bx = (b.destination_lng - b.origin_lng) * math.cos(mid);
+    by = b.destination_lat - b.origin_lat;
+    na = math.sqrt(ax * ax + ay * ay);
+    nb = math.sqrt(bx * bx + by * by);
+    if na < 0.01 or nb < 0.01 {   # under ~1 km
+        return 1.0;
+    }
+    return (ax * bx + ay * by) / (na * nb);
+}
+
+def _trip_km(t: Trip) -> float {
+    return _haversine_km(t.origin_lat, t.origin_lng, t.destination_lat, t.destination_lng);
+}
+
 def _route_overlap(rider: Trip, driver: Trip) -> dict {
     origin_gap = _haversine_km(rider.origin_lat, rider.origin_lng, driver.origin_lat, driver.origin_lng);
     dest_gap = _haversine_km(rider.destination_lat, rider.destination_lng, driver.destination_lat, driver.destination_lng);
+    if rider.mode == "ride" {
+        # Corridor fit: the extra distance the driver covers to pick the
+        # rider up and drop them off, versus driving their own route.
+        rider_km = _trip_km(rider);
+        driver_km = _trip_km(driver);
+        extra = _haversine_km(driver.origin_lat, driver.origin_lng, rider.origin_lat, rider.origin_lng)
+            + rider_km
+            + _haversine_km(rider.destination_lat, rider.destination_lng, driver.destination_lat, driver.destination_lng)
+            - driver_km;
+        extra = max(0.0, extra);
+        fit = 100.0 * rider_km / max(1.0, rider_km + extra * 1.5);
+        return {
+            "overlap": int(round(max(5.0, min(99.0, fit)))), "detour": max(3, int(round(extra * 1.2)) + 2),
+            "origin_gap": origin_gap, "dest_gap": dest_gap, "extra_km": extra, "driver_km": driver_km
+        };
+    }
     overlap = 100.0 - (origin_gap * 1.6) - (dest_gap * 6.0);
     if overlap < 5.0 { overlap = 5.0; }
     if overlap > 99.0 { overlap = 99.0; }
@@ -56,6 +92,10 @@ def _route_overlap(rider: Trip, driver: Trip) -> dict {
 def _time_compat(rider: Trip, driver: Trip) -> int {
     rider_dep = _minutes_of_day(rider.departure_time);
     driver_dep = _minutes_of_day(driver.departure_time);
+    if rider.mode == "ride" and driver.role == "DRIVER" {
+        # Compare with when the driver actually reaches the pickup (~55 km/h).
+        driver_dep += int(round(_haversine_km(driver.origin_lat, driver.origin_lng, rider.origin_lat, rider.origin_lng) * 1.1));
+    }
     diff = abs(rider_dep - driver_dep);
     window = rider.flexible_minutes + driver.flexible_minutes + 5;
     if window <= 0 { window = 20; }
@@ -98,6 +138,8 @@ def _score_match(route_overlap: int, detour: int, time_score: int, pref_score: i
     detour_score = 100 - (detour * 5);
     if detour_score < 0 { detour_score = 0; }
     overall = (route_overlap * 0.35) + (time_score * 0.25) + (detour_score * 0.15) + (pref_score * 0.15) + (cost_score * 0.10);
+    # A perfect route at the wrong time isn't a good match: timing scales the whole score.
+    overall = overall * (0.55 + 0.45 * time_score / 100.0);
     if overall > 99 { overall = 99; }
     return int(round(overall));
 }
@@ -237,23 +279,23 @@ def _make_trip(
 # Demo people for each Figma flow. Seeded per handle, so re-running only fills gaps.
 glob DEMO_PEOPLE: list[dict] = [
     # Drivers heading toward Ann Arbor ("Find a ride")
-    {"handle": "MapleDriver", "age": 34, "gender": "woman", "name": "Marcus", "role": "DRIVER", "mode": "ride", "from": "Flint, MI",
+    {"handle": "MapleDriver", "age": 34, "gender": "man", "name": "Marcus", "role": "DRIVER", "mode": "ride", "from": "Flint, MI",
      "to": "Ann Arbor, MI", "dep": "07:40", "arr": "09:05", "seats": 2, "rating": 4.9, "reviews": 28,
      "note": "Drive this route every weekday, happy to pick up on the way."},
-    {"handle": "NorthStar22", "age": 27, "gender": "man", "name": "Nadia", "role": "DRIVER", "mode": "ride", "from": "Fenton, MI",
+    {"handle": "NorthStar22", "age": 27, "gender": "woman", "name": "Nadia", "role": "DRIVER", "mode": "ride", "from": "Fenton, MI",
      "to": "Ann Arbor, MI", "dep": "08:05", "arr": "09:00", "seats": 3, "rating": 4.8, "reviews": 16,
      "note": "Leaving from Fenton Rd, quiet ride preferred."},
-    {"handle": "MorningMiles", "age": 45, "gender": "woman", "name": "Theo", "role": "DRIVER", "mode": "ride", "from": "Holly, MI",
+    {"handle": "MorningMiles", "age": 45, "gender": "man", "name": "Theo", "role": "DRIVER", "mode": "ride", "from": "Holly, MI",
      "to": "Ann Arbor, MI", "dep": "08:20", "arr": "09:15", "seats": 1, "rating": 0.0, "reviews": 0,
      "note": "New to Along, flexible by 20 minutes."},
     # Riders looking for a lift ("Find a buddy")
-    {"handle": "GardenRider", "age": 52, "gender": "man", "name": "Priya", "role": "RIDER", "mode": "ride", "from": "Grand Blanc, MI",
+    {"handle": "GardenRider", "age": 52, "gender": "woman", "name": "Priya", "role": "RIDER", "mode": "ride", "from": "Grand Blanc, MI",
      "to": "Ann Arbor, MI", "dep": "07:35", "arr": "09:15", "seats": 0, "rating": 4.9, "reviews": 11,
      "note": "Need to be at the office by 9:15."},
-    {"handle": "CampusBound", "age": 23, "gender": "non-binary", "name": "Devon", "role": "RIDER", "mode": "ride", "from": "Fenton, MI",
+    {"handle": "CampusBound", "age": 23, "gender": "man", "name": "Devon", "role": "RIDER", "mode": "ride", "from": "Fenton, MI",
      "to": "Ann Arbor, MI", "dep": "07:20", "arr": "08:30", "seats": 0, "rating": 4.7, "reviews": 8,
      "note": "Heading to campus, two of us."},
-    {"handle": "EarlyRobin", "age": 38, "gender": "woman", "name": "Sam", "role": "RIDER", "mode": "ride", "from": "Holly, MI",
+    {"handle": "EarlyRobin", "age": 38, "gender": "non-binary", "name": "Sam", "role": "RIDER", "mode": "ride", "from": "Holly, MI",
      "to": "Ann Arbor, MI", "dep": "07:50", "arr": "09:00", "seats": 0, "rating": 0.0, "reviews": 0,
      "note": "Flexible by 20 minutes."},
     {"handle": "LakeLooper", "age": 61, "gender": "man", "name": "Jordan", "role": "RIDER", "mode": "ride", "from": "Howell, MI",
@@ -263,13 +305,13 @@ glob DEMO_PEOPLE: list[dict] = [
      "to": "Detroit, MI", "dep": "07:45", "arr": "09:00", "seats": 0, "rating": 4.8, "reviews": 9,
      "note": "Looking for a regular carpool."},
     # Rental partners ("Rent together")
-    {"handle": "MovingNorth", "age": 41, "gender": "man", "name": "Alexis", "role": "PEER", "mode": "rental", "from": "Novi, MI",
+    {"handle": "MovingNorth", "age": 41, "gender": "woman", "name": "Alexis", "role": "PEER", "mode": "rental", "from": "Novi, MI",
      "to": "Detroit, MI", "dep": "09:00", "arr": "", "seats": 0, "people": 2, "vehicle": "Pickup truck",
      "moving": True, "rating": 4.8, "reviews": 6, "note": "Also moving and needs cargo room."},
     {"handle": "WeekendWay", "age": 31, "gender": "woman", "name": "Riley", "role": "PEER", "mode": "rental", "from": "Farmington Hills, MI",
      "to": "Detroit, MI", "dep": "10:00", "arr": "", "seats": 0, "people": 1, "vehicle": "SUV",
      "moving": False, "rating": 4.9, "reviews": 14, "note": "Weekend trip, flexible dates."},
-    {"handle": "LakeTrip", "age": 26, "gender": "man", "name": "Morgan", "role": "PEER", "mode": "rental", "from": "Livonia, MI",
+    {"handle": "LakeTrip", "age": 26, "gender": "non-binary", "name": "Morgan", "role": "PEER", "mode": "rental", "from": "Livonia, MI",
      "to": "Detroit, MI", "dep": "13:00", "arr": "", "seats": 0, "people": 2, "vehicle": "Minivan",
      "moving": False, "rating": 0.0, "reviews": 0, "note": "Flexible timing."},
     # Cab sharers ("Share a cab")
@@ -283,7 +325,7 @@ glob DEMO_PEOPLE: list[dict] = [
      "to": "Downtown Detroit", "dep": "18:15", "arr": "", "seats": 0, "people": 1, "rating": 0.0,
      "reviews": 0, "note": "Airport hotel, carry-on only."},
     # Cab shares heading TO the airport, so common trips have relevant partners.
-    {"handle": "AirportRun", "age": 24, "gender": "woman", "name": "Kai", "role": "PEER", "mode": "cab", "from": "Ann Arbor, MI",
+    {"handle": "AirportRun", "age": 24, "gender": "man", "name": "Kai", "role": "PEER", "mode": "cab", "from": "Ann Arbor, MI",
      "to": "Detroit Metro Airport", "dep": "06:30", "arr": "", "seats": 0, "people": 1, "rating": 4.8,
      "reviews": 12, "note": "Early flight, one suitcase."},
     {"handle": "RunwayReady", "age": 43, "gender": "man", "name": "Lou", "role": "PEER", "mode": "cab", "from": "Ann Arbor, MI",
@@ -298,29 +340,45 @@ glob DEMO_PEOPLE: list[dict] = [
 ];
 
 impl seed_demo_network() -> str {
-    present = set([t.owner_handle for t in _public_trips() if t.is_demo]);
+    import from services.demo_network { demo_network }
+    existing: dict[str, Trip] = {};
+    for t in _public_trips() {
+        if t.is_demo {
+            existing[t.owner_handle] = t;
+        }
+    }
     added = 0;
-    for p in DEMO_PEOPLE {
+    for p in DEMO_PEOPLE + demo_network([d["handle"] as str for d in DEMO_PEOPLE]) {
         handle = p["handle"] as str;
-        if handle in present {
-            for t in _public_trips() {
-                if t.is_demo and t.owner_handle == handle and t.owner_age == 0 {
-                    t.owner_age = p["age"] as int;
-                    t.owner_gender = p["gender"] as str;
-                }
-            }
+        if handle in existing {
+            # Keep already-seeded people in step with the table.
+            t = existing[handle];
+            t.owner_age = p["age"] as int;
+            t.owner_gender = p["gender"] as str;
+            t.demo_name = p["name"] as str;
             continue;
         }
         mode = p["mode"] as str;
-        origin = _town_coords(p["from"] as str);
-        dest = _town_coords(p["to"] as str);
+        origin = [p["from_lat"] as float, p["from_lng"] as float] if "from_lat" in p else _town_coords(p["from"] as str);
+        dest = [p["to_lat"] as float, p["to_lng"] as float] if "to_lat" in p else _town_coords(p["to"] as str);
+        arrive = p["arr"] as str;
+        if not arrive {
+            km = _haversine_km(origin[0], origin[1], dest[0], dest[1]);
+            arrive = _hhmm_shift(p["dep"] as str, int(round(km * 1.3 / 70.0 * 60.0)) + 8);
+        }
+        recurring: bool = (p["recurring"] as bool) if "recurring" in p else mode == "ride";
         trip = _make_trip(
             handle, "demo", p["role"] as str, p["from"] as str, origin[0], origin[1],
-            p["to"] as str, dest[0], dest[1], p["dep"] as str, p["arr"] as str,
-            mode == "ride", "Mon-Fri" if mode == "ride" else "", 20, p["seats"] as int,
+            p["to"] as str, dest[0], dest[1], p["dep"] as str, arrive,
+            recurring, "Mon-Fri" if recurring else "", 20, p["seats"] as int,
             10 if p["role"] == "DRIVER" else 0, False, False, True, "moderate",
             p["note"] as str, 20.0 if p["role"] == "RIDER" else 10.0, True, p["name"] as str
         );
+        if "gender_prefs" in p {
+            trip.gender_prefs = p["gender_prefs"] as list[str];
+            trip.age_min = p["age_min"] as int;
+            trip.age_max = p["age_max"] as int;
+        }
         trip.mode = mode;
         trip.people = (p["people"] as int) if "people" in p else 1;
         trip.vehicle = (p["vehicle"] as str) if "vehicle" in p else "";
@@ -538,6 +596,14 @@ impl create_trip(
     return jid(trip);
 }
 
+def _as_float(v: any) -> float {
+    try {
+        return float(v);
+    } except Exception {
+        return 0.0;
+    }
+}
+
 def _hhmm_shift(hhmm: str, minutes: int) -> str {
     total = (_minutes_of_day(hhmm) + minutes) % (24 * 60);
     return f"{total // 60:02d}:{total % 60:02d}";
@@ -551,9 +617,18 @@ impl create_journey(
     origin_lat: float = 0.0, origin_lng: float = 0.0,
     destination_lat: float = 0.0, destination_lng: float = 0.0,
     round_trip: bool = False, return_date: str = "", space_needed: str = "",
-    age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = [], pets_pref: str = "any"
+    age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = []
 ) -> str {
     me = _me();
+    # Omitted optional arguments can arrive as strings over HTTP; normalise them.
+    origin_lat = _as_float(origin_lat);
+    origin_lng = _as_float(origin_lng);
+    destination_lat = _as_float(destination_lat);
+    destination_lng = _as_float(destination_lng);
+    round_trip = round_trip in [True, "True", "true"];
+    age_min = int(age_min) if str(age_min).isdigit() else 1;
+    age_max = int(age_max) if str(age_max).isdigit() else 100;
+    gender_prefs = gender_prefs if isinstance(gender_prefs, list) else [];
     clean_mode = mode if mode in ["ride", "rental", "cab"] else "ride";
     clean_role = ("DRIVER" if role == "DRIVER" else "RIDER") if clean_mode == "ride" else "PEER";
     origin_coords = [origin_lat, origin_lng] if (origin_lat and origin_lng) else _town_coords(origin_name);
@@ -590,7 +665,6 @@ impl create_journey(
     trip.age_min = max(1, min(age_min, 100));
     trip.age_max = max(trip.age_min, min(age_max, 100));
     trip.gender_prefs = [g for g in gender_prefs if g in ["woman", "man", "non-binary"]];
-    trip.pets_pref = pets_pref if pets_pref in ["any", "bringing", "none"] else "any";
     trip.owner_age = me.age;
     trip.owner_gender = me.gender;
     trip.return_date = return_date.strip()[:10] if clean_mode == "rental" else "";
@@ -657,7 +731,7 @@ def _trip_view(t: Trip) -> TripView {
         destination_lat=t.destination_lat, destination_lng=t.destination_lng,
         owner_rating=rating[0], owner_reviews=rating[1], round_trip=t.round_trip,
         return_date=t.return_date, space_needed=t.space_needed,
-        age_min=t.age_min, age_max=t.age_max, gender_prefs=t.gender_prefs, pets_pref=t.pets_pref
+        age_min=t.age_min, age_max=t.age_max, gender_prefs=t.gender_prefs
     );
 }
 
@@ -2820,15 +2894,25 @@ def _relevant(o: Trip, t: Trip, route: dict) -> bool {
     og: float = route["origin_gap"] as float;
     dg: float = route["dest_gap"] as float;
     gap_min = abs(_minutes_of_day(o.departure_time) - _minutes_of_day(t.departure_time));
+    same_way = _heading_cos(o, t) >= 0.5;
+    # Short trips need close destinations; long ones can tolerate more.
+    my_km = _trip_km(o);
     if o.mode == "cab" {
         same_day = not o.travel_date or not t.travel_date or _days_apart(o.travel_date, t.travel_date) == 0 or o.recurring or t.recurring;
-        return og <= CAB_START_KM and dg <= CAB_END_KM and gap_min <= CAB_TIME_MIN and same_day;
+        end_ok = dg <= min(CAB_END_KM, max(3.0, 0.4 * my_km));
+        return og <= CAB_START_KM and end_ok and same_way and gap_min <= CAB_TIME_MIN and same_day;
     }
     if o.mode == "rental" {
         dates_ok = not o.travel_date or not t.travel_date or _days_apart(o.travel_date, t.travel_date) <= 1;
-        return og <= RENTAL_START_KM and dg <= RENTAL_END_KM and dates_ok;
+        end_ok = dg <= min(RENTAL_END_KM, max(5.0, 0.4 * my_km));
+        # A move needs cargo space; a road trip doesn't — don't mix the two.
+        return og <= RENTAL_START_KM and end_ok and same_way and dates_ok and o.moving_help == t.moving_help;
     }
-    return og <= RIDE_START_KM and dg <= RIDE_END_KM and gap_min <= RIDE_TIME_MIN;
+    # Rides: the driver must head the same way and not go far out of their way.
+    extra: float = (route["extra_km"] as float) if "extra_km" in route else dg;
+    driver_km: float = (route["driver_km"] as float) if "driver_km" in route else my_km;
+    detour_ok = extra <= min(30.0, max(15.0, 0.5 * driver_km));
+    return og <= RIDE_START_KM and same_way and detour_ok and gap_min <= RIDE_TIME_MIN;
 }
 
 # Does `person` (age, gender) fit the preferences set on journey `wants`?
@@ -2845,12 +2929,9 @@ def _fits(wants: Trip, age: int, gender: str) -> bool {
     return True;
 }
 
-# Preferences must hold both ways; pets can't clash.
+# Preferences must hold both ways.
 def _prefs_fit(a: Trip, b: Trip) -> bool {
     if not _fits(a, b.owner_age, b.owner_gender) or not _fits(b, a.owner_age, a.owner_gender) {
-        return False;
-    }
-    if (a.pets_pref == "bringing" and b.pets_pref == "none") or (a.pets_pref == "none" and b.pets_pref == "bringing") {
         return False;
     }
     return True;

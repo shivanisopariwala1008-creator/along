@@ -829,3 +829,10 @@ button.avatar { cursor: pointer; }
 .age-range input[type=range]::-moz-range-track { background: transparent; }
 .age-scale { display: flex; justify-content: space-between; font-size: 12px; color: var(--al-muted); margin-top: 2px; }
 .edit-hint { grid-column: 1 / -1; font-size: 12px; color: var(--al-muted); margin: 0; }
+
+/* Age + gender side by side (signup, profile gate) */
+.field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.field-pair .field { margin: 0; }
+.field-note { font-size: 12.5px; color: var(--al-muted); margin: 6px 0 14px; }
+.field select { width: 100%; border: 0; background: transparent; font: inherit; color: inherit; appearance: none; -webkit-appearance: none; outline: none; cursor: pointer; }
+.soon-pill { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--al-muted); background: var(--al-surface-soft); border: 1px solid var(--al-line); border-radius: 999px; padding: 4px 10px; white-space: nowrap; }

@@ -4,18 +4,14 @@ what other travelers see. You never see your own score or who rated you."""
 import from "@jac/runtime" { useNavigate, jacLogout }
 import from .Icon { Icon }
 import from .AppHeader { AppHeader }
-import from ...lib.along { initials, plural, flow_info, flow_of_trip, short_place, trip_timing }
-import from .AccountPages { auth_post }
-sv import from ...services.along { get_my_profile, update_profile_details, get_my_trips, get_blocked, unblock_user, get_my_relay_plans, get_email_status, ProfileView, TripView, BlockedView, RelayPlanView, EmailStatusView }
+import from ...lib.along { parse_age, initials, plural, flow_info, flow_of_trip, short_place, trip_timing }
+sv import from ...services.along { get_my_profile, update_profile_details, get_my_trips, get_blocked, unblock_user, get_my_relay_plans, ProfileView, TripView, BlockedView, RelayPlanView }
 
 def:pub ProfilePage() -> JsxElement {
     has profile: ProfileView | None = None,
         trips: list[TripView] = [],
         blocked: list[BlockedView] = [],
         plans: list[RelayPlanView] = [],
-        email_status: EmailStatusView | None = None,
-        verify_note: str = "",
-        verify_busy: bool = False,
         editing: bool = False,
         name_draft: str = "",
         region_draft: str = "",
@@ -32,19 +28,6 @@ def:pub ProfilePage() -> JsxElement {
         trips = await get_my_trips();
         blocked = await get_blocked();
         plans = await get_my_relay_plans();
-        email_status = await get_email_status();
-    }
-
-    async def send_verification -> None {
-        if email_status is None or not email_status.email {
-            verify_note = "No email address on this account.";
-            return;
-        }
-        verify_busy = True;
-        result = await auth_post("/user/send-verification", {"identity": {"type": "email", "value": email_status.email}}, True);
-        verify_busy = False;
-        failed: str = (result["message"] or "Couldn’t send the email. Please try again.") as str;
-        verify_note = ("We sent a link to " + email_status.email + ". It expires in 24 hours.") if result["ok"] else failed;
     }
 
     async def unblock(key: str) -> None {
@@ -69,12 +52,20 @@ def:pub ProfilePage() -> JsxElement {
             error = "Please enter your name.";
             return;
         }
+        if not (13 <= parse_age(age_draft) <= 120) {
+            error = "Please enter your age (13 or older).";
+            return;
+        }
+        if not gender_draft {
+            error = "Please choose your gender.";
+            return;
+        }
         saving = True;
         # Local names match the server parameters.
         display_name = name_draft;
         home_region = region_draft;
         phone = phone_draft;
-        age: int = int(age_draft) if age_draft.strip().isdigit() else 0;
+        age: int = parse_age(age_draft);
         gender = gender_draft;
         profile = await update_profile_details(display_name, home_region, phone, age, gender);
         saving = False;
@@ -116,11 +107,6 @@ def:pub ProfilePage() -> JsxElement {
                         <div>
                             <h2>{name}</h2>
                             <p>{region + " · " + since}</p>
-                            {if email_status is not None and email_status.verified {
-                                <span key="v" className="verified-pill"><Icon name="check" /> Email verified</span>
-                            } else {
-                                <span key="nv" className="verified-pill pending"><Icon name="shield" /> Email not verified yet</span>
-                            }}
                         </div>
                         {not editing and <button className="btn btn-secondary" onClick={start_edit}>Edit profile</button>}
                     </div>
@@ -139,14 +125,14 @@ def:pub ProfilePage() -> JsxElement {
                                 <div><input type="tel" value={phone_draft} onChange={lambda (e: ChangeEvent) { phone_draft = e.target.value; }} placeholder="(810) 555-0148" autoComplete="tel" /></div>
                             </label>
                             <label className="field">
-                                <span>Age (optional)</span>
+                                <span>Age</span>
                                 <div><input type="number" min="1" max="120" value={age_draft} onChange={lambda (e: ChangeEvent) { age_draft = e.target.value; }} placeholder="e.g. 28" /></div>
                             </label>
                             <label className="field">
-                                <span>Gender (optional)</span>
+                                <span>Gender</span>
                                 <div>
                                     <select value={gender_draft} onChange={lambda (e: ChangeEvent) { gender_draft = e.target.value; }}>
-                                        <option value="">Prefer not to say</option>
+                                        <option value="" disabled>Choose…</option>
                                         <option value="woman">Woman</option>
                                         <option value="man">Man</option>
                                         <option value="non-binary">Non-binary</option>
@@ -154,7 +140,7 @@ def:pub ProfilePage() -> JsxElement {
                                     <Icon name="chevron" />
                                 </div>
                             </label>
-                            <p className="edit-hint">Age and gender are only used so other travelers’ match preferences can include you. They’re never shown on your profile.</p>
+                            <p className="edit-hint">Age and gender are only used for matching preferences. They’re never shown on your profile.</p>
                             {error and <p className="form-error">{error}</p>}
                             <div className="edit-actions">
                                 <button className="btn btn-secondary" onClick={lambda (e: MouseEvent) { editing = False; }}>Cancel</button>
@@ -205,14 +191,17 @@ def:pub ProfilePage() -> JsxElement {
                             <span className="setting-icon"><Icon name="shield" /></span>
                             <span>
                                 <strong>Email verification</strong>
-                                <small>{(("Verified · " if email_status is not None and email_status.verified else "Not verified yet · ") + (email_status.email if email_status is not None else "")) if email_status is not None else "Checking…"}</small>
-                                {verify_note and <small className="verify-note">{verify_note}</small>}
+                                <small>Confirm your email to add a badge to your profile</small>
                             </span>
-                            {if email_status is not None and email_status.verified {
-                                <b key="ok">Verified</b>
-                            } else {
-                                <button key="send" className="btn btn-secondary" disabled={verify_busy} onClick={lambda (e: MouseEvent) { send_verification(); }}>{"Sending…" if verify_busy else "Verify email"}</button>
-                            }}
+                            <span className="soon-pill">Coming soon</span>
+                        </div>
+                        <div>
+                            <span className="setting-icon"><Icon name="user" /></span>
+                            <span>
+                                <strong>Identity verification</strong>
+                                <small>Verify your ID so others know you’re you</small>
+                            </span>
+                            <span className="soon-pill">Coming soon</span>
                         </div>
                         <div>
                             <span className="setting-icon"><Icon name="user" /></span>

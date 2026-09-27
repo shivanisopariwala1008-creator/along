@@ -3,8 +3,8 @@ Signup is three awaited steps: create account, log in, save the display name."""
 
 import from "@jac/runtime" { Link, useNavigate, useLocation, jacLogin, jacSignup }
 import from .along.Icon { Icon }
-import from .along.AccountPages { auth_post }
-sv import from ..services.along { update_profile }
+import from ..lib.along { parse_age }
+sv import from ..services.along { update_profile_details }
 
 def:pub AuthPage(mode: str = "login") -> JsxElement {
     location = useLocation();
@@ -17,6 +17,8 @@ def:pub AuthPage(mode: str = "login") -> JsxElement {
     has email: str = "",
         password: str = "",
         display_name: str = "",
+        age_text: str = "",
+        gender: str = "",
         busy: bool = False,
         error: str = "";
 
@@ -41,6 +43,14 @@ def:pub AuthPage(mode: str = "login") -> JsxElement {
             error = "Please tell us your name.";
             return;
         }
+        if is_signup and not (13 <= parse_age(age_text) <= 120) {
+            error = "Please enter your age (you must be 13 or older).";
+            return;
+        }
+        if is_signup and not gender {
+            error = "Please choose your gender.";
+            return;
+        }
 
         busy = True;
         error = "";
@@ -62,11 +72,8 @@ def:pub AuthPage(mode: str = "login") -> JsxElement {
                 return;
             }
             if is_signup {
-                _ = await update_profile(display_name.strip(), "");
-            }
-            if is_signup {
-                # Send the verification email right away (also enables password reset).
-                _ = await auth_post("/user/send-verification", {"identity": {"type": "email", "value": clean_email}}, True);
+                age: int = parse_age(age_text);
+                _ = await update_profile_details(display_name.strip(), "", "", age, gender);
             }
         } except Exception as ex {
             error = "Something went wrong. Please try again.";
@@ -93,6 +100,24 @@ def:pub AuthPage(mode: str = "login") -> JsxElement {
                     <span>Your name</span>
                     <div><Icon name="user" /><input id="name" value={display_name} onChange={handle_name} placeholder="Priya" autoComplete="name" /></div>
                 </label>
+                <div key="basics" className="field-pair">
+                    <label className="field">
+                        <span>Age</span>
+                        <div><input id="age" type="number" min="13" max="120" inputMode="numeric" value={age_text} onChange={lambda (e: ChangeEvent) { age_text = e.target.value; }} placeholder="e.g. 28" /></div>
+                    </label>
+                    <label className="field">
+                        <span>Gender</span>
+                        <div>
+                            <select id="gender" value={gender} onChange={lambda (e: ChangeEvent) { gender = e.target.value; }}>
+                                <option value="" disabled>Choose…</option>
+                                <option value="woman">Woman</option>
+                                <option value="man">Man</option>
+                                <option value="non-binary">Non-binary</option>
+                            </select>
+                        </div>
+                    </label>
+                </div>
+                <p key="basics-note" className="field-note">Used only to match travel preferences — never shown on your profile.</p>
             }}
             <label className="field">
                 <span>Email</span>
