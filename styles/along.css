@@ -836,3 +836,35 @@ button.avatar { cursor: pointer; }
 .field-note { font-size: 12.5px; color: var(--al-muted); margin: 6px 0 14px; }
 .field select { width: 100%; border: 0; background: transparent; font: inherit; color: inherit; appearance: none; -webkit-appearance: none; outline: none; cursor: pointer; }
 .soon-pill { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--al-muted); background: var(--al-surface-soft); border: 1px solid var(--al-line); border-radius: 999px; padding: 4px 10px; white-space: nowrap; }
+
+/* Profile: removable journeys + people you've rated */
+.journey-row-wrap { position: relative; display: flex; align-items: center; gap: 8px; }
+.journey-row-wrap .journey-row { flex: 1; min-width: 0; }
+.row-remove { flex: none; width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--al-line); background: white; color: var(--al-muted); display: grid; place-items: center; cursor: pointer; }
+.row-remove:hover { color: #a63c34; border-color: #e6b8b3; background: #fbf1f0; }
+.row-confirm { flex: none; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--al-ink); white-space: nowrap; }
+.row-confirm .btn { min-height: 32px; padding: 5px 12px; font-size: 12.5px; }
+.rated-list { margin: 4px 0 22px; }
+.rated-list h3 { margin-bottom: 2px; }
+.section-note { font-size: 12.5px; color: var(--al-muted); margin: 0 0 10px; }
+.rated-row { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--al-line); border-radius: 12px; background: white; margin-bottom: 8px; }
+.rated-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.rated-main strong { font-size: 13.5px; }
+.rated-stars { display: flex; align-items: center; gap: 1px; }
+.rated-stars i { font-style: normal; color: #d9d6cc; font-size: 14px; line-height: 1; }
+.rated-stars i.on { color: #e3a008; }
+.rated-stars small { margin-left: 8px; color: var(--al-muted); font-size: 12px; }
+.rated-comment { color: var(--al-muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rated-actions { flex: none; display: flex; align-items: center; gap: 12px; }
+.rated-actions .btn { min-height: 32px; padding: 5px 12px; font-size: 12.5px; }
+.rated-actions .link-button { font-size: 12.5px; color: var(--al-muted); }
+.rated-actions .link-button:hover { color: #a63c34; }
+@media (max-width: 640px) {
+  .rated-row, .journey-row-wrap { flex-wrap: wrap; }
+  .rated-actions, .row-confirm { width: 100%; justify-content: flex-end; }
+}
+
+/* Rental: counters near pickup and dropoff */
+.rental-spot-lists { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.rental-spot-lists .rental-spots { margin-top: 0; }
+.driver-toggle { margin-top: 12px; }

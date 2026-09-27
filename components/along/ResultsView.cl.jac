@@ -120,6 +120,8 @@ def:pub ResultsView() -> JsxElement {
         subtitle = "Finding the best route overlaps…";
     } elif status == "error" {
         subtitle = "Something went wrong while matching.";
+    } elif len(shown) == 0 and len(relays) > 0 {
+        subtitle = str(len(relays)) + (" way" if len(relays) == 1 else " ways") + " to get there with two rides";
     } elif len(shown) == 0 {
         subtitle = "Try expanding your distance or timing.";
     } else {
@@ -179,7 +181,7 @@ def:pub ResultsView() -> JsxElement {
                     </div>
                     {if status == "loading" or phase == "searching" {
                         <SearchSteps key="searching" step={step} />
-                    } elif len(shown) == 0 {
+                    } elif len(shown) == 0 and len(relays) == 0 {
                         <div key="empty" className="empty-state">
                             <span><Icon name="map" size={30} /></span>
                             <h3>{"Couldn’t load matches" if status == "error" else "No close matches yet"}</h3>
@@ -193,7 +195,7 @@ def:pub ResultsView() -> JsxElement {
                     } else {
                         if len(relays) > 0 and phase != "searching" {
                             <div key="relays" className="relay-list">
-                                <p className="relay-intro">No one drives the whole way — two rides get you there on time.</p>
+                                <p className="relay-intro">{"No one drives the whole way — two rides get you there on time." if len(shown) == 0 else "Two rides fit your time better than the direct options below."}</p>
                                 {for r in relays {
                                     <RelayCard
                                         key={r.id} relay={r} selected={r.id == relay_id}

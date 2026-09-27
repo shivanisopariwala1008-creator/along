@@ -83,6 +83,7 @@ node Trip {
         round_trip: bool = False,
         return_date: str = "",                # rentals: when the car goes back
         space_needed: str = "",               # rentals when moving: how much cargo space
+        needs_driver: bool = False,           # rentals: "I don't drive — someone else should"
         matchmaker_done: bool = False,        # have others been told about this journey yet?
         # Who this traveler is happy to travel with (all journey types).
         age_min: int = 1,
@@ -180,6 +181,8 @@ node Rating {
         tags: list[str] = [],        # quick compliments, e.g. "On time", "Friendly"
         rated_on: str = "",          # "Sep 2026" — month only, to keep reviews anonymous
         mode: str = "";              # journey type the review is about
+    # Lets the author edit their own rating. Never sent to any client.
+    has match_id: str = "", rater_root: str = "";
 }
 
 # One traveler blocking another. Keys are root ids ("demo:<handle>" for demo
@@ -217,6 +220,13 @@ node Notification {
     has recipient_root: str = "", kind: str = "",   # match | message
         title: str = "", body: str = "", match_id: str = "", trip_id: str = "",
         created_at: str = "", read: bool = False;
+}
+
+# What the Coordinator has learned from real choices: running totals of the
+# score components of matches it showed vs. the ones people connected with.
+node LearnedWeights {
+    has shown: int = 0, chosen: int = 0,
+        shown_sum: dict[str, float] = {}, chosen_sum: dict[str, float] = {};
 }
 
 node ImpactRecord {
@@ -260,7 +270,7 @@ obj TripView {
         origin_lat: float = 0.0, origin_lng: float = 0.0,
         destination_lat: float = 0.0, destination_lng: float = 0.0,
         owner_rating: float = 0.0, owner_reviews: int = 0, round_trip: bool = False,
-        return_date: str = "", space_needed: str = "",
+        return_date: str = "", space_needed: str = "", needs_driver: bool = False,
         age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = [];
 }
 
@@ -392,7 +402,7 @@ obj ImpactView {
 obj Candidate {
     has trip_id: str = "", handle: str = "", owner_root: str = "",
         route_score: int = 0, detour: int = 0, origin_gap_km: float = 0.0, dest_gap_km: float = 0.0,
-        time_score: int = 0, time_gap_min: int = 0,
+        time_score: int = 0, time_gap_min: int = 0, time_delta: int = 0,
         preference_score: int = 0, trust_bonus: int = 0, rating: float = 0.0, reviews: int = 0,
         cost_score: int = 0, rider_savings: float = 0.0, driver_contribution: float = 0.0,
         overall: int = 0, notes: dict[str, str] = {};
@@ -400,6 +410,13 @@ obj Candidate {
 
 # A journey drafted from plain English by the trip assistant. The user always
 # reviews it on the normal form before anything is posted.
+# A rating I gave, for "People you've rated" on my profile.
+obj GivenRatingView {
+    has match_id: str = "", handle: str = "", stars: int = 0, comment: str = "",
+        tags: list[str] = [], mode: str = "", route: str = "", rated_on: str = "",
+        blocked: bool = False;
+}
+
 obj TripDraftView {
     has ok: bool = False, source: str = "",        # gemini | rules
         kind: str = "ride",                         # ride | buddy | rental | cab
@@ -560,7 +577,7 @@ def create_journey(
     origin_lat: float = 0.0, origin_lng: float = 0.0,
     destination_lat: float = 0.0, destination_lng: float = 0.0,
     round_trip: bool = False, return_date: str = "", space_needed: str = "",
-    age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = []
+    age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = [], needs_driver: bool = False
 ) -> str;
 
 # Car-rental counters near a point, nearest first (needs a Google Maps key).
@@ -570,6 +587,9 @@ def get_my_trip(trip_id: str) -> TripView | None;
 
 def get_my_trips() -> list[TripView];
 
+# Take one of my journeys down: it stops matching and its open suggestions close.
+def remove_journey(trip_id: str) -> bool;
+
 def get_my_conversations() -> list[ConversationSummaryView];
 
 def close_match(match_id: str) -> bool;
@@ -577,6 +597,11 @@ def close_match(match_id: str) -> bool;
 def complete_match(match_id: str) -> bool;
 
 def rate_match(match_id: str, stars: int, comment: str, tags: list[str] = []) -> bool;
+
+# Ratings I've given (newest first), and one of them for editing.
+def get_my_ratings() -> list[GivenRatingView];
+
+def get_my_rating(match_id: str) -> GivenRatingView | None;
 
 def get_traveler_profile(match_id: str) -> TravelerProfileView | None;
 

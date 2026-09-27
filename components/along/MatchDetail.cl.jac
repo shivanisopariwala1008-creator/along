@@ -142,7 +142,7 @@ def:pub MatchDetail(match_id: str) -> JsxElement {
                     {card.status == "completed" and <button className="btn btn-secondary full-button graph-link" onClick={lambda (e: MouseEvent) { nav("/rate/" + match_id); }}>
                         <Icon name="star" /> Leave a review
                     </button>}
-                    <button className="decline-link" onClick={decline} disabled={declining}>{"Closing…" if declining else "Not a match"}</button>
+                    <button className="decline-link" onClick={decline} disabled={declining}>{"Removing…" if declining else "Remove match"}</button>
                     <div className="safe-note">
                         <Icon name="lock" />
                         <span>Your full name, exact address, and contact details are never shared without permission.</span>
@@ -178,6 +178,9 @@ def _preference_chips(t: TripView | None) -> list[str] {
     chips = chips + (["Smoking OK"] if t.smoking else ["Non-smoking"]);
     if t.mode == "rental" {
         chips = chips + ["Vehicle: " + (t.vehicle or "Flexible")];
+        if t.needs_driver {
+            chips = chips + ["Needs someone to drive"];
+        }
         if t.moving_help {
             chips = chips + ["Moving: " + (t.space_needed or "needs cargo space")];
         }

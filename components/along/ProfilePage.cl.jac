@@ -4,14 +4,23 @@ what other travelers see. You never see your own score or who rated you."""
 import from "@jac/runtime" { useNavigate, jacLogout }
 import from .Icon { Icon }
 import from .AppHeader { AppHeader }
+import from .SafetyActions { SafetyDialog }
 import from ...lib.along { parse_age, initials, plural, flow_info, flow_of_trip, short_place, trip_timing }
-sv import from ...services.along { get_my_profile, update_profile_details, get_my_trips, get_blocked, unblock_user, get_my_relay_plans, ProfileView, TripView, BlockedView, RelayPlanView }
+sv import from ...services.along {
+    get_my_profile, update_profile_details, get_my_trips, get_blocked, unblock_user, get_my_relay_plans,
+    get_my_ratings, close_match, remove_journey,
+    ProfileView, TripView, BlockedView, RelayPlanView, GivenRatingView
+}
 
 def:pub ProfilePage() -> JsxElement {
     has profile: ProfileView | None = None,
         trips: list[TripView] = [],
         blocked: list[BlockedView] = [],
         plans: list[RelayPlanView] = [],
+        rated: list[GivenRatingView] = [],
+        blocking: GivenRatingView | None = None,
+        confirm_remove: str = "",
+        confirm_trip: str = "",
         editing: bool = False,
         name_draft: str = "",
         region_draft: str = "",
@@ -28,6 +37,25 @@ def:pub ProfilePage() -> JsxElement {
         trips = await get_my_trips();
         blocked = await get_blocked();
         plans = await get_my_relay_plans();
+        rated = await get_my_ratings();
+    }
+
+    async def remove_match(match_id: str) -> None {
+        _ = await close_match(match_id);
+        rated = [r for r in rated if r.match_id != match_id];
+        confirm_remove = "";
+    }
+
+    async def drop_journey(trip_id: str) -> None {
+        _ = await remove_journey(trip_id);
+        trips = [t for t in trips if t.id != trip_id];
+        confirm_trip = "";
+    }
+
+    async def after_block -> None {
+        blocking = None;
+        rated = await get_my_ratings();
+        blocked = await get_blocked();
     }
 
     async def unblock(key: str) -> None {
@@ -173,18 +201,70 @@ def:pub ProfilePage() -> JsxElement {
                             </button>
                         }}
                         {for t in trips {
-                            <button key={t.id} className="journey-row" onClick={lambda (e: MouseEvent) { nav("/results?tripId=" + t.id); }}>
-                                <span className={"flow-badge small " + flow_info(flow_of_trip(t))["accent"]}>
-                                    <Icon name={flow_info(flow_of_trip(t))["icon"]} size={16} />
-                                </span>
-                                <span>
-                                    <strong>{short_place(t.origin_name) + " → " + short_place(t.destination_name)}</strong>
-                                    <small>{flow_info(flow_of_trip(t))["title"] + " · " + trip_timing(t)}</small>
-                                </span>
-                                <em>View matches <Icon name="chevron" size={14} /></em>
-                            </button>
+                            <div key={t.id} className="journey-row-wrap">
+                                <button className="journey-row" onClick={lambda (e: MouseEvent) { nav("/results?tripId=" + t.id); }}>
+                                    <span className={"flow-badge small " + flow_info(flow_of_trip(t))["accent"]}>
+                                        <Icon name={flow_info(flow_of_trip(t))["icon"]} size={16} />
+                                    </span>
+                                    <span>
+                                        <strong>{short_place(t.origin_name) + " → " + short_place(t.destination_name)}</strong>
+                                        <small>{flow_info(flow_of_trip(t))["title"] + " · " + trip_timing(t)}</small>
+                                    </span>
+                                    <em>View matches <Icon name="chevron" size={14} /></em>
+                                </button>
+                                {if confirm_trip == t.id {
+                                    <span key="confirm" className="row-confirm">
+                                        Remove this journey?
+                                        <button className="btn btn-danger" onClick={lambda (e: MouseEvent) { drop_journey(t.id); }}>Remove</button>
+                                        <button className="btn btn-secondary" onClick={lambda (e: MouseEvent) { confirm_trip = ""; }}>Keep</button>
+                                    </span>
+                                } else {
+                                    <button key="x" className="row-remove" aria-label="Remove journey" title="Remove journey" onClick={lambda (e: MouseEvent) { confirm_trip = t.id; }}><Icon name="x" size={15} /></button>
+                                }}
+                            </div>
                         }}
                     </div>
+                    {if len(rated) > 0 {
+                        <div key="rated" className="rated-list">
+                            <h3>People you’ve rated</h3>
+                            <p className="section-note">Only you can see this. You can change a rating any time — they never see who rated them.</p>
+                            {for r in rated {
+                                <div key={r.match_id} className="rated-row">
+                                    <span className="avatar avatar-small">{initials(r.handle)}</span>
+                                    <span className="rated-main">
+                                        <strong>{r.handle}</strong>
+                                        <span className="rated-stars" aria-label={str(r.stars) + " stars"}>
+                                            {for n in [1, 2, 3, 4, 5] {
+                                                <i key={str(n)} className={"on" if n <= r.stars else ""}>★</i>
+                                            }}
+                                            <small>{(r.route + " · " if r.route else "") + r.rated_on}</small>
+                                        </span>
+                                        {r.comment and <small className="rated-comment">{"“" + r.comment + "”"}</small>}
+                                    </span>
+                                    {if confirm_remove == r.match_id {
+                                        <span key="confirm" className="row-confirm">
+                                            Remove this match?
+                                            <button className="btn btn-danger" onClick={lambda (e: MouseEvent) { remove_match(r.match_id); }}>Remove</button>
+                                            <button className="btn btn-secondary" onClick={lambda (e: MouseEvent) { confirm_remove = ""; }}>Keep</button>
+                                        </span>
+                                    } else {
+                                        <span key="actions" className="rated-actions">
+                                            <button className="btn btn-secondary" onClick={lambda (e: MouseEvent) { nav("/rate/" + r.match_id); }}>Edit rating</button>
+                                            <button className="link-button" onClick={lambda (e: MouseEvent) { blocking = r; }}>Block</button>
+                                            <button className="link-button" onClick={lambda (e: MouseEvent) { confirm_remove = r.match_id; }}>Remove</button>
+                                        </span>
+                                    }}
+                                </div>
+                            }}
+                        </div>
+                    }}
+                    {if blocking is not None {
+                        <SafetyDialog
+                            key="block" match_id={(blocking as GivenRatingView).match_id}
+                            handle={(blocking as GivenRatingView).handle} mode="block"
+                            onClose={lambda { after_block(); }}
+                        />
+                    }}
                     <h3>Trust &amp; verification</h3>
                     <div className="settings-list">
                         <div>

@@ -153,7 +153,18 @@ def:pub ChatView(match_id: str) -> JsxElement {
     completed = c is not None and c.match_status == "completed";
 
     return <div className="app-shell">
-        {if dialog and c is not None {
+        {if dialog == "remove" {
+            <div key="remove" className="dialog-backdrop" role="dialog" aria-modal="true" aria-label="Remove match">
+                <div className="dialog-card">
+                    <h2>{"Remove " + display_name + "?"}</h2>
+                    <p className="dialog-sub">This match and conversation leave your list. They aren’t told, and you can still find each other in future searches.</p>
+                    <div className="dialog-actions">
+                        <button className="btn btn-secondary" onClick={lambda (e: MouseEvent) { dialog = ""; }}>Keep</button>
+                        <button className="btn btn-danger" disabled={busy} onClick={lambda (e: MouseEvent) { handle_decline(); }}>Remove match</button>
+                    </div>
+                </div>
+            </div>
+        } elif dialog and c is not None {
             <SafetyDialog key="safety" match_id={match_id} handle={display_name} mode={dialog} onClose={lambda { dialog = ""; }} />
         }}
         <main className={"chat-page" + ("" if match_id else " no-selection")}>
@@ -220,6 +231,7 @@ def:pub ChatView(match_id: str) -> JsxElement {
                                     <div key="menu" className="pop-menu" role="menu">
                                         <button role="menuitem" onClick={lambda (e: MouseEvent) { share(); }}><Icon name="share" size={16} /> Share my trip</button>
                                         <button role="menuitem" onClick={lambda (e: MouseEvent) { menu_open = False; dialog = "report"; }}><Icon name="flag" size={16} /> Report</button>
+                                        <button role="menuitem" onClick={lambda (e: MouseEvent) { menu_open = False; dialog = "remove"; }}><Icon name="x" size={16} /> Remove match</button>
                                         <button role="menuitem" className="danger" onClick={lambda (e: MouseEvent) { menu_open = False; dialog = "block"; }}><Icon name="block" size={16} /> Block</button>
                                     </div>
                                 }}

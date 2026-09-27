@@ -51,6 +51,9 @@ def:pub JourneyForm(kind: str) -> JsxElement {
         space_needed: str = "Boxes + small furniture",
         rental_spots: list[RentalSpotView] = [],
         spots_loading: bool = False,
+        drop_spots: list[RentalSpotView] = [],
+        drop_loading: bool = False,
+        needs_driver: bool = False,
         draft_note: str = "",
         draft_sentence: str = "",
         maps_key: str = "",
@@ -121,10 +124,30 @@ def:pub JourneyForm(kind: str) -> JsxElement {
         spots_loading = False;
     }
 
+    # ...and around the dropoff, for returning the car.
+    async can with (destination_lat, destination_lng) entry {
+        if kind != "rental" or not destination_lat or not destination_lng {
+            drop_spots = [];
+            return;
+        }
+        drop_loading = True;
+        lat = destination_lat;
+        lng = destination_lng;
+        found: list[RentalSpotView] = await get_rental_spots(lat, lng);
+        drop_spots = found;
+        drop_loading = False;
+    }
+
     def use_spot(sp: RentalSpotView) {
         origin_name = sp.name + (", " + sp.address if sp.address else "");
         origin_lat = sp.lat;
         origin_lng = sp.lng;
+    }
+
+    def use_drop_spot(sp: RentalSpotView) {
+        destination_name = sp.name + (", " + sp.address if sp.address else "");
+        destination_lat = sp.lat;
+        destination_lng = sp.lng;
     }
 
     async can with entry {
@@ -224,7 +247,7 @@ def:pub JourneyForm(kind: str) -> JsxElement {
                 pickup_distance, vehicle, moving_help, age_pref, gender_pref, notes,
                 origin_lat, origin_lng, destination_lat, destination_lng,
                 round_trip and kind != "rental", return_date, space_needed,
-                age_min, age_max, gender_prefs
+                age_min, age_max, gender_prefs, needs_driver and kind == "rental"
             );
             nav("/results?tripId=" + trip_id);
         } except Exception as ex {
@@ -303,28 +326,20 @@ def:pub JourneyForm(kind: str) -> JsxElement {
                             <div><strong>Round trip</strong><small>I’m also coming back the same way</small></div>
                             <i />
                         </label>
-                    } elif origin_lat {
-                        <div key="spots" className="rental-spots">
-                            <div className="rental-spots-head">
-                                <Icon name="key" size={16} />
-                                <strong>Car rental counters near your pickup</strong>
-                                <small>{"Looking…" if spots_loading else (str(len(rental_spots)) + " within 20 km")}</small>
-                            </div>
-                            {if not spots_loading and len(rental_spots) == 0 {
-                                <p key="none" className="rental-empty">No rental counters found nearby — try a larger town or the airport.</p>
+                    } else {
+                        <div key="spot-lists" className="rental-spot-lists">
+                            {if origin_lat {
+                                <RentalSpots
+                                    key="pick" title="Rental counters near your pickup" spots={rental_spots}
+                                    loading={spots_loading} action="Use as pickup" onUse={use_spot}
+                                />
                             }}
-                            <ul>
-                                {for sp in rental_spots[:6] {
-                                    <li key={sp.name + sp.address}>
-                                        <div>
-                                            <strong>{sp.name}</strong>
-                                            <small>{str(sp.km) + " km" + (f" · ★ {sp.rating:.1f} ({sp.reviews})" if sp.reviews else "") + (" · " + sp.address if sp.address else "")}</small>
-                                        </div>
-                                        <a href={sp.maps_url} target="_blank" rel="noreferrer">Map ↗</a>
-                                        <button type="button" className="btn btn-secondary" onClick={lambda (e: MouseEvent) { use_spot(sp); }}>Use as pickup</button>
-                                    </li>
-                                }}
-                            </ul>
+                            {if destination_lat {
+                                <RentalSpots
+                                    key="drop" title="Return counters near your dropoff" spots={drop_spots}
+                                    loading={drop_loading} action="Use as dropoff" onUse={use_drop_spot}
+                                />
+                            }}
                         </div>
                     }}
                 </section>
@@ -363,6 +378,12 @@ def:pub JourneyForm(kind: str) -> JsxElement {
                                 <SelectField label="Space you need" value={space_needed} options={SPACE_OPTIONS} onValue={lambda (v: str) { space_needed = v; }} />
                             </div>
                         }}
+                        <label className="moving-toggle driver-toggle">
+                            <input type="checkbox" checked={needs_driver} onChange={lambda (e: ChangeEvent) { needs_driver = not needs_driver; }} />
+                            <span><Icon name="user" /></span>
+                            <div><strong>I need someone to drive</strong><small>Don’t drive? We’ll only match you with partners who can.</small></div>
+                            <i />
+                        </label>
                         <div className="vehicle-grid">
                             {for v in VEHICLES {
                                 <button
@@ -529,5 +550,34 @@ def:pub AgeRange(min_age: int, max_age: int, onChange: Callable[[int, int], None
             <input type="range" min="1" max="100" step="1" value={str(max_age)} onChange={set_high} aria-label="Oldest age" />
         </div>
         <div className="age-scale"><span>1</span><span>100+</span></div>
+    </div>;
+}
+
+# Car-rental counters around a point, with a button to use one.
+def RentalSpots(
+    title: str, spots: list[RentalSpotView], loading: bool, action: str,
+    onUse: Callable[[RentalSpotView], None]
+) -> JsxElement {
+    return <div className="rental-spots">
+        <div className="rental-spots-head">
+            <Icon name="key" size={16} />
+            <strong>{title}</strong>
+            <small>{"Looking…" if loading else (str(len(spots)) + " within 20 km")}</small>
+        </div>
+        {if not loading and len(spots) == 0 {
+            <p key="none" className="rental-empty">No rental counters found nearby — try a larger town or the airport.</p>
+        }}
+        <ul>
+            {for sp in spots[:5] {
+                <li key={sp.name + sp.address}>
+                    <div>
+                        <strong>{sp.name}</strong>
+                        <small>{str(sp.km) + " km" + (f" · ★ {sp.rating:.1f} ({sp.reviews})" if sp.reviews else "") + (" · " + sp.address if sp.address else "")}</small>
+                    </div>
+                    <a href={sp.maps_url} target="_blank" rel="noreferrer">Map ↗</a>
+                    <button type="button" className="btn btn-secondary" onClick={lambda (e: MouseEvent) { onUse(sp); }}>{action}</button>
+                </li>
+            }}
+        </ul>
     </div>;
 }

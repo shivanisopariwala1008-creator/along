@@ -89,25 +89,55 @@ def _route_overlap(rider: Trip, driver: Trip) -> dict {
     return {"overlap": int(round(overlap)), "detour": detour, "origin_gap": origin_gap, "dest_gap": dest_gap};
 }
 
-def _time_compat(rider: Trip, driver: Trip) -> int {
-    rider_dep = _minutes_of_day(rider.departure_time);
-    driver_dep = _minutes_of_day(driver.departure_time);
-    if rider.mode == "ride" and driver.role == "DRIVER" {
-        # Compare with when the driver actually reaches the pickup (~55 km/h).
-        driver_dep += int(round(_haversine_km(driver.origin_lat, driver.origin_lng, rider.origin_lat, rider.origin_lng) * 1.1));
+# Timing fit from the searcher's point of view (`me`), comparing the moments
+# that actually matter: when a driver reaches the rider's pickup, and — for
+# "arrive by" trips — whether the rider gets there on time.
+#   delta < 0: the other person is earlier than you; delta > 0: later.
+# Closest time wins; a little earlier beats the same amount later, and being
+# late for an arrive-by deadline costs the most. Returns {score, delta}.
+def _time_fit(me: Trip, other: Trip) -> dict {
+    mine = _minutes_of_day(me.departure_time);
+    theirs = _minutes_of_day(other.departure_time);
+    deadline_trip: Trip | None = None;
+    if me.mode == "ride" and me.role == "RIDER" {
+        theirs += int(round(_haversine_km(other.origin_lat, other.origin_lng, me.origin_lat, me.origin_lng) * 1.1));
+        if me.time_preference == "arrive_by" and me.arrival_deadline {
+            deadline_trip = me;
+        }
+    } elif me.mode == "ride" and me.role == "DRIVER" {
+        mine += int(round(_haversine_km(me.origin_lat, me.origin_lng, other.origin_lat, other.origin_lng) * 1.1));
+        if other.time_preference == "arrive_by" and other.arrival_deadline {
+            deadline_trip = other;
+        }
     }
-    diff = abs(rider_dep - driver_dep);
-    window = rider.flexible_minutes + driver.flexible_minutes + 5;
-    if window <= 0 { window = 20; }
-    score = 100.0 - (float(diff) / float(window)) * 60.0;
+    score = 100.0;
+    delta = theirs - mine;
+    if deadline_trip is not None {
+        # Driver time at the pickup + the rider's own leg (~55 km/h) + a few minutes.
+        pickup = theirs if me.role == "RIDER" else mine;
+        dt = deadline_trip as Trip;
+        arrive = pickup + int(round(_trip_km(dt) * 1.1)) + 5;
+        delta = arrive - _minutes_of_day(dt.arrival_deadline);
+        if delta <= 0 {
+            score = 100.0 - max(0, -delta - 25) * 0.7;      # early is fine; very early costs a little
+        } else {
+            score = 90.0 - delta * 3.0;                      # late for a deadline costs the most
+        }
+    } else {
+        free = 30 if me.mode == "rental" else 10;
+        over = max(0, abs(delta) - free);
+        rate = 0.9 if delta < 0 else 1.5;                    # a bit earlier beats a bit later
+        if me.mode == "rental" {
+            rate = rate / 2.0;                               # rentals are for the whole day
+        }
+        score = 100.0 - over * rate;
+    }
     # Only two recurring commutes can disagree on their weekly schedule.
-    if rider.recurring and driver.recurring
-        and rider.recurrence_days.strip().lower() != driver.recurrence_days.strip().lower() {
+    if me.recurring and other.recurring
+        and me.recurrence_days.strip().lower() != other.recurrence_days.strip().lower() {
         score -= 15.0;
     }
-    if score < 10.0 { score = 10.0; }
-    if score > 100.0 { score = 100.0; }
-    return int(round(score));
+    return {"score": int(round(max(10.0, min(100.0, score)))), "delta": delta};
 }
 
 def _preference_compat(rider_pref: Preference, driver_pref: Preference) -> int {
@@ -134,10 +164,15 @@ def _cost_benefit(rider: Trip, driver: Trip, origin_gap: float, dest_gap: float)
     return {"rider_savings": weekly, "driver_contribution": driver_contribution, "score": cost_score};
 }
 
-def _score_match(route_overlap: int, detour: int, time_score: int, pref_score: int, cost_score: int) -> int {
+glob DEFAULT_WEIGHTS: dict[str, float] = {"route": 0.35, "time": 0.25, "detour": 0.15, "pref": 0.15, "cost": 0.10},
+     LEARN_AFTER: int = 5;        # connections needed before the weights start to move
+
+def _score_match(route_overlap: int, detour: int, time_score: int, pref_score: int, cost_score: int, w: dict[str, float] = {}) -> int {
     detour_score = 100 - (detour * 5);
     if detour_score < 0 { detour_score = 0; }
-    overall = (route_overlap * 0.35) + (time_score * 0.25) + (detour_score * 0.15) + (pref_score * 0.15) + (cost_score * 0.10);
+    wt = w if len(w) else DEFAULT_WEIGHTS;
+    overall = (route_overlap * wt["route"]) + (time_score * wt["time"]) + (detour_score * wt["detour"])
+        + (pref_score * wt["pref"]) + (cost_score * wt["cost"]);
     # A perfect route at the wrong time isn't a good match: timing scales the whole score.
     overall = overall * (0.55 + 0.45 * time_score / 100.0);
     if overall > 99 { overall = 99; }
@@ -350,14 +385,6 @@ impl seed_demo_network() -> str {
     added = 0;
     for p in DEMO_PEOPLE + demo_network([d["handle"] as str for d in DEMO_PEOPLE]) {
         handle = p["handle"] as str;
-        if handle in existing {
-            # Keep already-seeded people in step with the table.
-            t = existing[handle];
-            t.owner_age = p["age"] as int;
-            t.owner_gender = p["gender"] as str;
-            t.demo_name = p["name"] as str;
-            continue;
-        }
         mode = p["mode"] as str;
         origin = [p["from_lat"] as float, p["from_lng"] as float] if "from_lat" in p else _town_coords(p["from"] as str);
         dest = [p["to_lat"] as float, p["to_lng"] as float] if "to_lat" in p else _town_coords(p["to"] as str);
@@ -365,6 +392,16 @@ impl seed_demo_network() -> str {
         if not arrive {
             km = _haversine_km(origin[0], origin[1], dest[0], dest[1]);
             arrive = _hhmm_shift(p["dep"] as str, int(round(km * 1.3 / 70.0 * 60.0)) + 8);
+        }
+        if handle in existing {
+            # Keep already-seeded people in step with the table.
+            t = existing[handle];
+            t.owner_age = p["age"] as int;
+            t.owner_gender = p["gender"] as str;
+            t.demo_name = p["name"] as str;
+            t.departure_time = p["dep"] as str;
+            t.arrival_deadline = arrive;
+            continue;
         }
         recurring: bool = (p["recurring"] as bool) if "recurring" in p else mode == "ride";
         trip = _make_trip(
@@ -617,7 +654,7 @@ impl create_journey(
     origin_lat: float = 0.0, origin_lng: float = 0.0,
     destination_lat: float = 0.0, destination_lng: float = 0.0,
     round_trip: bool = False, return_date: str = "", space_needed: str = "",
-    age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = []
+    age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = [], needs_driver: bool = False
 ) -> str {
     me = _me();
     # Omitted optional arguments can arrive as strings over HTTP; normalise them.
@@ -626,6 +663,7 @@ impl create_journey(
     destination_lat = _as_float(destination_lat);
     destination_lng = _as_float(destination_lng);
     round_trip = round_trip in [True, "True", "true"];
+    needs_driver = needs_driver in [True, "True", "true"];
     age_min = int(age_min) if str(age_min).isdigit() else 1;
     age_max = int(age_max) if str(age_max).isdigit() else 100;
     gender_prefs = gender_prefs if isinstance(gender_prefs, list) else [];
@@ -669,6 +707,7 @@ impl create_journey(
     trip.owner_gender = me.gender;
     trip.return_date = return_date.strip()[:10] if clean_mode == "rental" else "";
     trip.space_needed = space_needed.strip()[:40] if clean_mode == "rental" and moving_help else "";
+    trip.needs_driver = needs_driver and clean_mode == "rental";
     me +>:Posts:+> trip;
 
     # Make sure there is always someone to match with in the demo.
@@ -680,6 +719,20 @@ impl create_journey(
 
 impl get_my_trips() -> list[TripView] {
     return [_trip_view(t) for t in [_me() ->:Posts:->][?:Trip] if t.active];
+}
+
+impl remove_journey(trip_id: str) -> bool {
+    t = _load_trip(trip_id);
+    if t is None or (t as Trip).owner_root != _my_root_id() {
+        return False;
+    }
+    (t as Trip).active = False;
+    for m in _my_matches() {
+        if (m.rider_trip_id == trip_id or m.driver_trip_id == trip_id) and m.status == "suggested" {
+            m.status = "closed";
+        }
+    }
+    return True;
 }
 
 impl get_my_trip(trip_id: str) -> TripView | None {
@@ -730,7 +783,7 @@ def _trip_view(t: Trip) -> TripView {
         origin_lat=t.origin_lat, origin_lng=t.origin_lng,
         destination_lat=t.destination_lat, destination_lng=t.destination_lng,
         owner_rating=rating[0], owner_reviews=rating[1], round_trip=t.round_trip,
-        return_date=t.return_date, space_needed=t.space_needed,
+        return_date=t.return_date, space_needed=t.space_needed, needs_driver=t.needs_driver,
         age_min=t.age_min, age_max=t.age_max, gender_prefs=t.gender_prefs
     );
 }
@@ -806,18 +859,39 @@ def _why_text(m: Match, mine: Trip | None, other: Trip | None) -> str {
     ot = other as Trip;
     gap = m.pickup_gap_miles;
     near = "close to" if gap >= 0 and gap < 4 else ("a short hop from" if gap >= 0 and gap < 12 else "within reach of");
+    text = "";
     if m.mode == "ride" and ot.role == "DRIVER" {
-        return f"Their {ot.origin_name.split(',')[0]} → {ot.destination_name.split(',')[0]} route passes {near} {me_t.origin_name.split(',')[0]}, adding about {m.detour_minutes} min.";
-    }
-    if m.mode == "ride" {
-        return f"Their pickup area in {ot.origin_name.split(',')[0]} is {near} your route, about a {m.detour_minutes}-minute detour.";
-    }
-    if m.mode == "rental" {
+        text = f"Their {ot.origin_name.split(',')[0]} → {ot.destination_name.split(',')[0]} route passes {near} {me_t.origin_name.split(',')[0]}, adding about {m.detour_minutes} min.";
+    } elif m.mode == "ride" {
+        text = f"Their pickup area in {ot.origin_name.split(',')[0]} is {near} your route, about a {m.detour_minutes}-minute detour.";
+    } elif m.mode == "rental" {
         extra = " and needs cargo room" if ot.moving_help else "";
         vehicle = f" ({ot.vehicle})" if ot.vehicle else "";
-        return f"Also heading from {ot.origin_name.split(',')[0]} toward {ot.destination_name.split(',')[0]}{vehicle}{extra}.";
+        driver = " They'd like someone to do the driving." if ot.needs_driver else "";
+        text = f"Also heading from {ot.origin_name.split(',')[0]} toward {ot.destination_name.split(',')[0]}{vehicle}{extra}.{driver}";
+    } else {
+        text = f"A destination near {ot.destination_name.split(',')[0]}; their start is {near} yours.";
     }
-    return f"Similar timing and a destination near {ot.destination_name.split(',')[0]}; their start is {near} yours.";
+    return text + " " + _timing_sentence(me_t, ot);
+}
+
+# One plain sentence about timing, from my side of the match.
+def _timing_sentence(me: Trip, other: Trip) -> str {
+    fit = _time_fit(me, other);
+    delta = fit["delta"] as int;
+    deadline = (me.role == "RIDER" and me.time_preference == "arrive_by" and me.arrival_deadline)
+        or (me.role == "DRIVER" and other.time_preference == "arrive_by" and other.arrival_deadline);
+    if me.mode == "ride" and deadline {
+        if delta <= 0 {
+            return "Gets you there on time." if me.role == "RIDER" else "You'd get them there on time.";
+        }
+        return f"Would arrive about {delta} min late — message them to agree on an earlier time.";
+    }
+    if abs(delta) <= 10 {
+        return "Your times line up.";
+    }
+    side = "earlier" if delta < 0 else "later";
+    return f"They're about {abs(delta)} min {side} than you — message them to agree on a time.";
 }
 
 glob AGENT_ORDER: list[str] = ["Route Scout", "Schedule Agent", "Trust Agent", "Cost Agent", "Coordinator"];
@@ -854,6 +928,68 @@ def _card_score(c: MatchCardView) -> int {
 
 def _sort_cards(cards: list[MatchCardView]) -> list[MatchCardView] {
     return sorted(cards, key=_card_score, reverse=True);
+}
+
+# ---------------------------------------------------------------------------
+# Learning the weights. Each component a person actually connects on is
+# compared with what we showed them: components that are consistently higher
+# in chosen matches gain weight (at most ±40% of the default), the rest lose
+# a little, and the weights are renormalised to sum to 1.
+# ---------------------------------------------------------------------------
+
+def _learned() -> LearnedWeights {
+    for lw in [root.shared-->][?:LearnedWeights] {
+        return lw;
+    }
+    lw = LearnedWeights();
+    root.shared ++> lw;
+    grant(lw, level=WritePerm);
+    return lw;
+}
+
+def _components(route: int, detour: int, time: int, pref: int, cost: int) -> dict[str, float] {
+    return {
+        "route": float(route), "time": float(time), "detour": float(max(0, 100 - detour * 5)),
+        "pref": float(pref), "cost": float(cost)
+    };
+}
+
+def _add_to(totals: dict[str, float], parts: dict[str, float]) -> dict[str, float] {
+    out: dict[str, float] = dict(totals);
+    for (k, v) in parts.items() {
+        out[k] = out.get(k, 0.0) + v;
+    }
+    return out;
+}
+
+def _current_weights() -> dict[str, float] {
+    lw = _learned();
+    if lw.chosen < LEARN_AFTER or lw.shown == 0 {
+        return DEFAULT_WEIGHTS;
+    }
+    raw: dict[str, float] = {};
+    for (k, base) in DEFAULT_WEIGHTS.items() {
+        chosen_avg = lw.chosen_sum.get(k, 0.0) / lw.chosen;
+        shown_avg = lw.shown_sum.get(k, 0.0) / lw.shown;
+        lift = max(-0.4, min(0.4, (chosen_avg - shown_avg) / 50.0));
+        raw[k] = base * (1.0 + lift);
+    }
+    total = sum(raw.values());
+    return {k: v / total for (k, v) in raw.items()};
+}
+
+def _record_shown(cands: list[Candidate]) -> None {
+    lw = _learned();
+    for c in cands[:5] {
+        lw.shown_sum = _add_to(lw.shown_sum, _components(c.route_score, c.detour, c.time_score, c.preference_score, c.cost_score));
+        lw.shown += 1;
+    }
+}
+
+def _record_chosen(m: Match) -> None {
+    lw = _learned();
+    lw.chosen_sum = _add_to(lw.chosen_sum, _components(m.route_score, m.detour_minutes, m.time_score, m.preference_score, m.cost_benefit_score));
+    lw.chosen += 1;
 }
 
 def _impact_record() -> ImpactRecord {
@@ -932,10 +1068,12 @@ impl ScheduleAgent.inspect {
     if c is None {
         skip;
     }
-    pair = _pair(_origin_trip(self.origin_id), here);
-    c.time_score = _time_compat(pair[0], pair[1]);
-    c.time_gap_min = abs(_minutes_of_day(pair[0].departure_time) - _minutes_of_day(pair[1].departure_time));
-    c.notes["Schedule Agent"] = f"{c.time_score}% schedule fit · departures {c.time_gap_min} min apart";
+    fit = _time_fit(_origin_trip(self.origin_id), here);
+    c.time_score = fit["score"] as int;
+    c.time_delta = fit["delta"] as int;
+    c.time_gap_min = abs(c.time_delta);
+    when = "on time" if c.time_gap_min <= 5 else (f"{c.time_gap_min} min " + ("earlier" if c.time_delta < 0 else "later"));
+    c.notes["Schedule Agent"] = f"{c.time_score}% schedule fit · {when}";
 }
 
 impl TrustAgent.start {
@@ -994,11 +1132,13 @@ impl Coordinator.decide {
     for m in _my_matches() {
         existing[m.rider_trip_id + ":" + m.driver_trip_id] = m;
     }
+    weights = _current_weights();
     for c in self.candidates {
-        base = _score_match(c.route_score, c.detour, c.time_score, c.preference_score, c.cost_score);
+        base = _score_match(c.route_score, c.detour, c.time_score, c.preference_score, c.cost_score, weights);
         c.overall = max(1, min(99, base + c.trust_bonus));
     }
     ranked = sorted(self.candidates, key=_cand_overall, reverse=True);
+    _record_shown(ranked);
     for (i, c) in enumerate(ranked) {
         c.notes["Coordinator"] = f"Ranked #{i + 1} of {len(ranked)} · {c.overall}% overall";
         other = _load_trip(c.trip_id);
@@ -1106,14 +1246,19 @@ def _run_agents(trip_id: str, with_relays: bool) -> AgentRunView {
     relays: list[RelayView] = [];
     o = origin as Trip;
     if with_relays and o.mode == "ride" and o.role == "RIDER" {
-        # Only offer two rides when they beat the best direct ride.
+        # Two rides are a fallback: only look when no direct ride is good,
+        # and never build one from a driver who already goes your way.
         best_direct = cards[0].overall_score if len(cards) > 0 else 0;
-        relays = [r for r in _find_relays(o, cards) if best_direct < 70 or r.score > best_direct];
+        summary = "A direct ride works — no need for two";
+        if best_direct < RELAY_ONLY_BELOW {
+            direct_ids = set([c.trip_id for c in found]);
+            relays = [r for r in _find_relays(o, direct_ids) if r.score > best_direct];
+            summary = (f"Found {len(relays)} 2-ride route{'s' if len(relays) != 1 else ''}; handoff picked by " + (relays[0].handoff.source if relays[0].handoff is not None else "rules"))
+                if len(relays) else "No 2-ride route beats the direct options";
+        }
         steps = steps + [AgentStepView(
             agent="Relay Agent", role="Pairs two drivers with a safe handoff when no one goes the whole way",
-            looked_at=len([c for c in cards if c.other_trip is not None]), kept=len(relays),
-            summary=(f"Found {len(relays)} 2-ride route{'s' if len(relays) != 1 else ''}; handoff picked by " + (relays[0].handoff.source if relays[0].handoff is not None else "rules"))
-                if len(relays) else "No 2-ride route beats waiting for a direct ride"
+            looked_at=k, kept=len(relays), summary=summary
         )];
     }
     return AgentRunView(cards=cards, steps=steps, relays=relays);
@@ -1322,6 +1467,7 @@ impl create_anonymous_connection(match_id: str) -> ConversationView | None {
     }
     convo = Conversation(status="anonymous", identity_revealed=False, created_at=_now());
     mt +>:Opens:+> convo;
+    _record_chosen(mt);   # someone chose to talk to this match: learn from it
     _share_with(convo, _other_root(mt), WritePerm);
     if _is_demo_match(mt) {
         _seed_demo_chat(convo, mt);
@@ -1480,16 +1626,22 @@ impl rate_match(match_id: str, stars: int, comment: str, tags: list[str] = []) -
     }
     mt = m as Match;
     role = _my_role(mt);
-    already = mt.rider_rated if role == "RIDER" else mt.driver_rated;
-    if already {
-        return False;
+    clean_tags = [t for t in tags if t in REVIEW_TAGS][:6];
+    mine = _my_rating(mt);
+    if mine is not None {
+        # Editing is always allowed; the review keeps its original month.
+        r = mine as Rating;
+        r.stars = stars;
+        r.comment = comment.strip()[:1000];
+        r.tags = clean_tags;
+        return True;
     }
     other_handle = mt.driver_handle if role == "RIDER" else mt.rider_handle;
-    clean_tags = [t for t in tags if t in REVIEW_TAGS][:6];
     rating = Rating(
         ratee_key=_ratee_key(_other_root(mt), other_handle), stars=stars,
         comment=comment.strip()[:1000], created_at=_now(), tags=clean_tags,
-        rated_on=datetime.datetime.now().strftime("%b %Y"), mode=mt.mode
+        rated_on=datetime.datetime.now().strftime("%b %Y"), mode=mt.mode,
+        match_id=jid(mt), rater_root=_my_root_id()
     );
     root.shared ++> rating;
     grant(rating, level=ReadPerm);
@@ -1499,6 +1651,78 @@ impl rate_match(match_id: str, stars: int, comment: str, tags: list[str] = []) -
         mt.driver_rated = True;
     }
     return True;
+}
+
+def _owned_by_me(n: any) -> bool {
+    owner: any = n.__jac__.root;  # jac:ignore[E1030]
+    return owner is not None and owner.hex == _my_root_id();
+}
+
+# My rating for this match. Older ratings weren't linked to their match, so
+# the first unlinked one I wrote about this person gets linked now.
+def _my_rating(mt: Match) -> Rating | None {
+    me = _my_root_id();
+    mid = jid(mt);
+    ratings = [root.shared-->][?:Rating];
+    for r in ratings {
+        if r.match_id == mid and r.rater_root == me {
+            return r;
+        }
+    }
+    role = _my_role(mt);
+    already = mt.rider_rated if role == "RIDER" else mt.driver_rated;
+    if not already {
+        return None;
+    }
+    other_key = _ratee_key(_other_root(mt), mt.driver_handle if role == "RIDER" else mt.rider_handle);
+    for r in ratings {
+        if not r.match_id and r.ratee_key == other_key and _owned_by_me(r) {
+            r.match_id = mid;
+            r.rater_root = me;
+            return r;
+        }
+    }
+    return None;
+}
+
+def _given_view(mt: Match, r: Rating) -> GivenRatingView {
+    role = _my_role(mt);
+    other_handle = mt.driver_handle if role == "RIDER" else mt.rider_handle;
+    other = _load_trip(mt.driver_trip_id if role == "RIDER" else mt.rider_trip_id);
+    route = "";
+    if other is not None {
+        ot = other as Trip;
+        route = ot.origin_name.split(",")[0] + " → " + ot.destination_name.split(",")[0];
+    }
+    return GivenRatingView(
+        match_id=jid(mt), handle=other_handle, stars=r.stars, comment=r.comment, tags=r.tags,
+        mode=mt.mode, route=route, rated_on=r.rated_on,
+        blocked=_ratee_key(_other_root(mt), other_handle) in _blocked_keys()
+    );
+}
+
+impl get_my_ratings() -> list[GivenRatingView] {
+    out: list[GivenRatingView] = [];
+    for mt in _my_matches() {
+        role = _my_role(mt);
+        if not (mt.rider_rated if role == "RIDER" else mt.driver_rated) {
+            continue;
+        }
+        r = _my_rating(mt);
+        if r is not None {
+            out.append(_given_view(mt, r as Rating));
+        }
+    }
+    return list(reversed(out));
+}
+
+impl get_my_rating(match_id: str) -> GivenRatingView | None {
+    m = _find_match(match_id);
+    if m is None {
+        return None;
+    }
+    r = _my_rating(m as Match);
+    return _given_view(m as Match, r as Rating) if r is not None else None;
 }
 
 # ---------------------------------------------------------------------------
@@ -1976,7 +2200,25 @@ impl plan_trip(text: str) -> TripDraftView {
 # one for all three people (rules if Gemini is unavailable).
 # ---------------------------------------------------------------------------
 
-glob RELAY_NEAR_KM: float = 9.0,        # pickup/dropoff this close to a driver's route (town centre to highway is often 5-8 km)
+# Distance (km) from a point to a trip's straight start->end line.
+def _seg_dist_km(lat: float, lng: float, t: Trip) -> float {
+    kx = 111.32 * math.cos(math.radians(lat));
+    ky = 110.57;
+    ax = (t.origin_lng - lng) * kx;
+    ay = (t.origin_lat - lat) * ky;
+    bx = (t.destination_lng - lng) * kx;
+    by = (t.destination_lat - lat) * ky;
+    dx = bx - ax;
+    dy = by - ay;
+    length2 = dx * dx + dy * dy;
+    u = 0.0 if length2 == 0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / length2));
+    px = ax + u * dx;
+    py = ay + u * dy;
+    return math.sqrt(px * px + py * py);
+}
+
+glob RELAY_ONLY_BELOW: int = 65,       # look for 2-ride routes only when the best direct ride scores below this
+     RELAY_NEAR_KM: float = 9.0,        # pickup/dropoff this close to a driver's route (town centre to highway is often 5-8 km)
      RELAY_MEET_KM: float = 4.0,        # the two routes must pass this close to each other
      RELAY_MIN_WAIT: int = 3,
      RELAY_MAX_WAIT: int = 45,
@@ -2027,14 +2269,23 @@ def _route_of(t: Trip) -> RouteView {
     return get_trip_route(jid(t));
 }
 
-def _find_relays(o: Trip, cards: list[MatchCardView]) -> list[RelayView] {
-    # Every active driver can be one leg — the direct-match gates don't apply
-    # here, because a relay leg only needs to cover part of the journey.
+def _find_relays(o: Trip, direct_ids: set[str]) -> list[RelayView] {
+    # Any active driver can be one leg (a leg only covers part of the trip),
+    # except drivers who are already direct matches. A cheap straight-line
+    # check keeps only drivers passing near your pickup or destination, at a
+    # plausible time, before any road routes are fetched.
     hidden = _blocked_keys();
+    my_dep = _minutes_of_day(o.departure_time);
     drivers: list[tuple[Trip, str]] = [];
     for t in _public_trips() {
-        if t.active and t.role == "DRIVER" and t.mode == "ride" and t.owner_root != _my_root_id()
-            and _ratee_key(t.owner_root, t.owner_handle) not in hidden and _prefs_fit(o, t) {
+        if not t.active or t.role != "DRIVER" or t.mode != "ride" or t.owner_root == _my_root_id()
+            or jid(t) in direct_ids or _ratee_key(t.owner_root, t.owner_handle) in hidden
+            or abs(_minutes_of_day(t.departure_time) - my_dep) > 150 or not _prefs_fit(o, t) {
+            continue;
+        }
+        near_start = _seg_dist_km(o.origin_lat, o.origin_lng, t) <= RELAY_NEAR_KM + 5.0;
+        near_end = _seg_dist_km(o.destination_lat, o.destination_lng, t) <= RELAY_NEAR_KM + 5.0;
+        if near_start or near_end {
             drivers.append((t, ""));
         }
     }
@@ -2705,7 +2956,7 @@ def _plan_view(p: RelayPlan, with_options: bool) -> RelayPlanView {
         dropped_id = p.leg1_match_id if dropped == "first" else p.leg2_match_id;
         run = _run_agents(p.rider_trip_id, False);
         options = [
-            r for r in _find_relays(o, run.cards)
+            r for r in _find_relays(o, set())
             if (r.leg2_match_id == kept if dropped == "first" else r.leg1_match_id == kept)
             and r.leg1_match_id != dropped_id and r.leg2_match_id != dropped_id
         ];
@@ -2875,7 +3126,7 @@ impl get_email_status() -> EmailStatusView {
 
 glob CAB_START_KM: float = 6.0,       # shared cab: start this close
      CAB_END_KM: float = 10.0,        # ...and drop-offs this close
-     CAB_TIME_MIN: int = 60,          # ...leaving within an hour
+     CAB_TIME_MIN: int = 120,         # ...within two hours (further off ranks lower; they can agree on a time)
      RENTAL_START_KM: float = 20.0,
      RENTAL_END_KM: float = 30.0,
      RIDE_START_KM: float = 35.0,     # driver's start area vs rider's
@@ -2893,7 +3144,7 @@ def _days_apart(a: str, b: str) -> int {
 def _relevant(o: Trip, t: Trip, route: dict) -> bool {
     og: float = route["origin_gap"] as float;
     dg: float = route["dest_gap"] as float;
-    gap_min = abs(_minutes_of_day(o.departure_time) - _minutes_of_day(t.departure_time));
+    gap_min = abs(_time_fit(o, t)["delta"] as int);
     same_way = _heading_cos(o, t) >= 0.5;
     # Short trips need close destinations; long ones can tolerate more.
     my_km = _trip_km(o);
@@ -2906,7 +3157,9 @@ def _relevant(o: Trip, t: Trip, route: dict) -> bool {
         dates_ok = not o.travel_date or not t.travel_date or _days_apart(o.travel_date, t.travel_date) <= 1;
         end_ok = dg <= min(RENTAL_END_KM, max(5.0, 0.4 * my_km));
         # A move needs cargo space; a road trip doesn't — don't mix the two.
-        return og <= RENTAL_START_KM and end_ok and same_way and dates_ok and o.moving_help == t.moving_help;
+        # Someone has to drive: two non-drivers can't share a car.
+        driver_ok = not (o.needs_driver and t.needs_driver);
+        return og <= RENTAL_START_KM and end_ok and same_way and dates_ok and o.moving_help == t.moving_help and driver_ok;
     }
     # Rides: the driver must head the same way and not go far out of their way.
     extra: float = (route["extra_km"] as float) if "extra_km" in route else dg;
@@ -2946,7 +3199,7 @@ def _ensure_match(o: Trip, t: Trip) -> str {
         }
     }
     route = _route_overlap(o, t);
-    time_score = _time_compat(o, t);
+    time_score = _time_fit(o, t)["score"] as int;
     pref_score = _preference_compat(_preference_of(o), _preference_of(t));
     cost = _cost_benefit(o, t, route["origin_gap"] as float, route["dest_gap"] as float);
     overall = _score_match(route["overlap"] as int, route["detour"] as int, time_score, pref_score, cost["score"] as int);

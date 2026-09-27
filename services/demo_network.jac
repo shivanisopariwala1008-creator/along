@@ -1,4 +1,4 @@
-"""Demo network — about 270 sample journeys across 20 Southeast/Mid Michigan
+"""Demo network — about 340 sample journeys across 20 Southeast/Mid Michigan
 cities, so every journey type (and every filter) has realistic matches.
 
   Find a ride   -> drivers commuting home <-> workplaces
@@ -63,6 +63,14 @@ glob PLACES: dict[str, list] = {
     "DTW": ["Detroit Metro Airport (DTW), Romulus, MI", 42.2162, -83.3554],
     "FNT": ["Bishop International Airport (FNT), Flint, MI", 42.9655, -83.7436],
     "LAN": ["Capital Region Airport (LAN), Lansing, MI", 42.7787, -84.5874],
+    # Train stations
+    "Amtrak Ann Arbor": ["Ann Arbor Amtrak Station, MI", 42.2877, -83.7432],
+    "Amtrak Dearborn": ["Dearborn Amtrak (John D. Dingell Transit Center), MI", 42.3072, -83.2355],
+    "Amtrak Detroit": ["Detroit Amtrak Station (New Center), MI", 42.3677, -83.0735],
+    "Amtrak Royal Oak": ["Royal Oak Amtrak Station, MI", 42.4876, -83.1446],
+    "Amtrak Troy": ["Troy Transit Center (Amtrak), MI", 42.5452, -83.1640],
+    "Amtrak East Lansing": ["East Lansing Amtrak Station, MI", 42.7189, -84.4957],
+    "Amtrak Flint": ["Flint Amtrak Station, MI", 42.9860, -83.7390],
     # Landmarks and venues
     "Comerica Park": ["Comerica Park, Detroit, MI", 42.3390, -83.0485],
     "Little Caesars Arena": ["Little Caesars Arena, Detroit, MI", 42.3411, -83.0553],
@@ -347,7 +355,46 @@ glob ROUTES: list[list] = [
     ["rental", "PEER", "Flint", "Mackinaw City", ["08:00"], "SUV"],
     ["rental", "PEER", "Lansing", "Traverse City", ["09:00"], "Sedan"],
     ["rental", "PEER", "Dearborn", "Frankenmuth", ["10:00"], "Compact car"],
-    ["rental", "PEER", "Ann Arbor", "Frankenmuth", ["09:30"], "Sedan"]
+    ["rental", "PEER", "Ann Arbor", "Frankenmuth", ["09:30"], "Sedan"],
+    # Cab shares to and from train stations
+    ["cab", "PEER", "Ypsilanti", "Amtrak Ann Arbor", ["", ""], ""],
+    ["cab", "PEER", "Amtrak Ann Arbor", "Ypsilanti", [""], ""],
+    ["cab", "PEER", "Canton", "Amtrak Dearborn", ["", ""], ""],
+    ["cab", "PEER", "Detroit", "Amtrak Dearborn", [""], ""],
+    ["cab", "PEER", "Amtrak Dearborn", "Livonia", [""], ""],
+    ["cab", "PEER", "Midtown Detroit", "Amtrak Detroit", [""], ""],
+    ["cab", "PEER", "Warren", "Amtrak Royal Oak", [""], ""],
+    ["cab", "PEER", "Birmingham", "Amtrak Troy", ["", ""], ""],
+    ["cab", "PEER", "Amtrak Troy", "Rochester Hills", [""], ""],
+    ["cab", "PEER", "Lansing", "Amtrak East Lansing", ["", ""], ""],
+    ["cab", "PEER", "Grand Blanc", "Amtrak Flint", [""], ""],
+    ["cab", "PEER", "Ann Arbor", "DTW", ["", "", ""], ""],
+    ["cab", "PEER", "Novi", "DTW", ["", ""], ""],
+    ["cab", "PEER", "Detroit", "DTW", ["", ""], ""],
+    # More airport runs through the day (the busiest cab-share use)
+    ["cab", "PEER", "Ann Arbor", "DTW", ["", "", "", "", "", ""], ""],
+    ["cab", "PEER", "Novi", "DTW", ["", "", "", ""], ""],
+    ["cab", "PEER", "Detroit", "DTW", ["", "", "", ""], ""],
+    ["cab", "PEER", "Troy", "DTW", ["", "", ""], ""],
+    ["cab", "PEER", "Canton", "DTW", ["", "", ""], ""],
+    ["cab", "PEER", "Dearborn", "DTW", ["", "", ""], ""],
+    ["cab", "PEER", "Royal Oak", "DTW", ["", "", ""], ""],
+    ["cab", "PEER", "Livonia", "DTW", ["", ""], ""],
+    ["cab", "PEER", "Southfield", "DTW", ["", ""], ""],
+    ["cab", "PEER", "Plymouth", "DTW", ["", ""], ""],
+    ["cab", "PEER", "Ypsilanti", "DTW", ["", ""], ""],
+    ["cab", "PEER", "Farmington Hills", "DTW", ["", ""], ""],
+    ["cab", "PEER", "Birmingham", "DTW", ["", ""], ""],
+    ["cab", "PEER", "DTW", "Ann Arbor", ["", "", "", ""], ""],
+    ["cab", "PEER", "DTW", "Novi", ["", ""], ""],
+    ["cab", "PEER", "DTW", "Detroit", ["", "", ""], ""],
+    ["cab", "PEER", "DTW", "Troy", ["", ""], ""],
+    ["cab", "PEER", "DTW", "Canton", ["", ""], ""],
+    ["cab", "PEER", "DTW", "Dearborn", ["", ""], ""],
+    ["cab", "PEER", "DTW", "Royal Oak", ["", ""], ""],
+    ["cab", "PEER", "Birmingham", "Troy", ["", ""], ""],
+    ["cab", "PEER", "Royal Oak", "Little Caesars Arena", ["", ""], ""],
+    ["cab", "PEER", "Ann Arbor", "Ypsilanti", ["", ""], ""]
 ];
 
 glob WOMEN: list[str] = [
@@ -413,6 +460,61 @@ glob WOMEN: list[str] = [
     ]
 };
 
+glob WORK: list[str] = [
+    "GM Tech Center", "GM RenCen", "Ford Dearborn", "Stellantis", "Rocket", "Michigan Medicine",
+    "Domino's Farms", "Corewell Royal Oak", "Henry Ford Hospital", "Big Beaver", "Southfield Town Center",
+    "Novi Business", "Trinity Livonia", "GM Flint", "Hurley", "State Capitol", "MSU", "UM Campus", "EMU",
+    "Wayne State", "Oakland U"
+],
+     LANDMARKS: list[str] = [
+    "Comerica Park", "Little Caesars Arena", "Ford Field", "The Henry Ford", "DIA", "Michigan Stadium",
+    "Somerset", "Twelve Oaks", "Great Lakes Crossing", "Belle Isle", "Eastern Market", "Detroit Zoo", "Pine Knob"
+],
+     GETAWAYS: list[str] = [
+    "Traverse City", "Mackinaw City", "Sleeping Bear", "Holland", "Grand Rapids", "Grand Haven",
+    "Frankenmuth", "Petoskey", "Kensington"
+];
+
+def _is_transit(key: str) -> bool {
+    return key in ["DTW", "FNT", "LAN"] or key.startswith("Amtrak ");
+}
+
+def _is_landmark(key: str) -> bool {
+    return key in LANDMARKS;
+}
+
+# A realistic departure for this kind of trip, spread in 5-minute steps:
+#   home -> work 7-9 AM, work -> home 4-6 PM, home <-> home 6 AM-11 PM,
+#   landmarks 9 AM-10 PM, airports/stations any time, moves 7-11 AM,
+#   getaways 7 AM-noon, driving tests 8 AM-3 PM.
+def _time_for(mode: str, origin: str, dest: str, k: int, i: int, n: int = 1) -> str {
+    window = [360, 1380];
+    if mode == "ride" {
+        window = [960, 1080] if origin in WORK else [420, 540];
+    } elif _is_transit(origin) or _is_transit(dest) {
+        window = [270, 1410];
+    } elif dest.startswith("Test ") {
+        window = [480, 900];
+    } elif dest in GETAWAYS {
+        window = [420, 720];
+    } elif mode == "rental" {
+        window = [420, 660];
+    } elif origin in WORK or dest in WORK or _is_landmark(origin) or _is_landmark(dest) {
+        window = [540, 1320];
+    }
+    seed = 0;
+    for ch in origin + "|" + dest {
+        seed = (seed * 31 + ord(ch)) % 1000003;
+    }
+    # Several trips on one route are spread across the window, one per slot.
+    slot = (window[1] - window[0]) // max(1, n);
+    start = window[0] + (slot * i) // 5 * 5;
+    steps = slot // 5;
+    offset = ((seed + k * 7919 + i * 104729) % (steps + 1)) * 5;
+    total = start + offset;
+    return f"{total // 60:02d}:{total % 60:02d}";
+}
+
 def _gender_of(k: int) -> str {
     slot = k % 9;
     if slot == 8 {
@@ -454,7 +556,8 @@ def demo_network(taken: list[str] = []) -> list[dict] {
         origin = r[2] as str;
         dest = r[3] as str;
         extra = r[5] as str;
-        for dep in (r[4] as list[str]) {
+        for (i, listed) in enumerate(r[4] as list[str]) {
+            dep = _time_for(mode, origin, dest, k, i, len(r[4] as list[str]));
             gender = _gender_of(k);
             noun_key = role if mode == "ride" else mode;
             nouns = NOUNS[noun_key];
