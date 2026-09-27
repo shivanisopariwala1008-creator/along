@@ -33,9 +33,17 @@ import from "@jac-client/assets/demo/16-rental.jpg" { default as img_16 }
 import from "@jac-client/assets/demo/17-driver.jpg" { default as img_17 }
 import from "@jac-client/assets/demo/18-profile.jpg" { default as img_18 }
 import from "@jac-client/assets/demo/19-rating.jpg" { default as img_19 }
+import from "@jac-client/assets/demo/20-offer-home.jpg" { default as img_20 }
+import from "@jac-client/assets/demo/21-offer-form.jpg" { default as img_21 }
+import from "@jac-client/assets/demo/22-offer-seats.jpg" { default as img_22 }
+import from "@jac-client/assets/demo/23-offer-riders.jpg" { default as img_23 }
+import from "@jac-client/assets/demo/24-rental-home.jpg" { default as img_24 }
+import from "@jac-client/assets/demo/25-rental-form.jpg" { default as img_25 }
+import from "@jac-client/assets/demo/26-rental-vehicle.jpg" { default as img_26 }
+import from "@jac-client/assets/demo/27-rental-results.jpg" { default as img_27 }
 
 glob TAGLINE: str = "Michigan, moving together.",
-     IMG: dict[str, str] = {"01-home": img_01, "02-login": img_02, "03-home-in": img_03, "04-form": img_04, "05-prefs": img_05, "06-timing": img_06, "07-searching": img_07, "08-results": img_08, "09-details": img_09, "10-chat": img_10, "11-reveal": img_11, "12-safety": img_12, "13-post": img_13, "14-posted": img_14, "15-bell": img_15, "16-rental": img_16, "17-driver": img_17, "18-profile": img_18, "19-rating": img_19};
+     IMG: dict[str, str] = {"01-home": img_01, "02-login": img_02, "03-home-in": img_03, "04-form": img_04, "05-prefs": img_05, "06-timing": img_06, "07-searching": img_07, "08-results": img_08, "09-details": img_09, "10-chat": img_10, "11-reveal": img_11, "12-safety": img_12, "13-post": img_13, "14-posted": img_14, "15-bell": img_15, "16-rental": img_16, "17-driver": img_17, "18-profile": img_18, "19-rating": img_19, "20-offer-home": img_20, "21-offer-form": img_21, "22-offer-seats": img_22, "23-offer-riders": img_23, "24-rental-home": img_24, "25-rental-form": img_25, "26-rental-vehicle": img_26, "27-rental-results": img_27};
 
 glob AGENTS: list[list[str]] = [
     ["spark", "Trip Assistant", "Gemini turns your sentence into a journey"],
@@ -70,10 +78,18 @@ def _scenes() -> list[dict] {
         {"kind": "screen", "img": IMG["13-post"], "kicker": "Step 12", "title": "No match yet? Post it", "caption": "Future travelers heading your way can find you.", "voice": "No match yet? Post your request, so future travelers heading your way can find you.", "click": [15.66, 60.95], "hover": False, "type": []},
         {"kind": "screen", "img": IMG["14-posted"], "kicker": "Step 13", "title": "Along keeps looking", "caption": "The Matchmaker agent tells you when someone fits.", "voice": "Along keeps looking. The Matchmaker agent tells you the moment someone fits.", "click": [80.74, 4.93], "hover": False, "type": []},
         {"kind": "screen", "img": IMG["15-bell"], "kicker": "Step 14", "title": "Get notified", "caption": "New matches land in your notifications.", "voice": "New matches land right in your notifications.", "click": [68.79, 26.14], "hover": True, "type": []},
-        {"kind": "screen", "img": IMG["16-rental"], "kicker": "Step 15", "title": "Share a rental", "caption": "Rental counters near your pickup and your drop-off.", "voice": "Sharing a rental? See rental counters near both your pickup and your drop-off.", "click": [73.24, 23.65], "hover": False, "type": []},
-        {"kind": "screen", "img": IMG["17-driver"], "kicker": "Step 16", "title": "Don't drive? No problem", "caption": "Ask for a partner who can drive.", "voice": "Moving house, or don't drive? Ask for a partner who can drive.", "click": [76.64, 50.02], "hover": False, "type": []},
-        {"kind": "screen", "img": IMG["18-profile"], "kicker": "Step 17", "title": "People you've rated", "caption": "Your journeys and ratings in one place.", "voice": "After the trip, rate your partner anonymously. Everyone you've rated lives on your profile.", "click": [53.2, 47.08], "hover": False, "type": []},
-        {"kind": "screen", "img": IMG["19-rating"], "kicker": "Step 18", "title": "Rate your trip", "caption": "Stars and compliments — edit them anytime.", "voice": "Stars and quick compliments build a trusted community, and you can edit them anytime.", "click": [53.36, 43.61], "hover": False, "type": []},
+        {"kind": "screen", "img": IMG["20-offer-home"], "kicker": "Offer a ride", "title": "Driving? Share your seats", "caption": "Say where you're driving and how many seats are free.", "voice": "Driving somewhere anyway? Offer your empty seats. Just say where you're driving, and how many seats are free.", "click": [37.98, 68.06], "hover": False, "type": [{"x": 8.33, "y": 68.06, "w": 24.95, "text": "Driving Lansing to Detroit, 7:30, 2 seats"}]},
+        {"kind": "screen", "img": IMG["21-offer-form"], "kicker": "Offer a ride", "title": "Your route, ready to post", "caption": "The assistant sets you up as the driver.", "voice": "The assistant sets you up as the driver, with your route, date and time.", "click": [50, 55], "hover": True, "type": []},
+        {"kind": "screen", "img": IMG["22-offer-seats"], "kicker": "Offer a ride", "title": "Seats, detour and timing", "caption": "Choose seats and how far you'll detour, then post.", "voice": "Choose your available seats and how far you'll detour. Then post your route and find riders.", "click": [72.7, 84.2], "hover": False, "type": []},
+        {"kind": "screen", "img": IMG["23-offer-riders"], "kicker": "Offer a ride", "title": "Riders along your route", "caption": "Ranked by detour, and whether you'll get them there on time.", "voice": "Along shows riders along your route, ranked by how little detour they add, and whether you'll get them there on time. Message a rider to set up the pickup.", "click": [34.47, 87.68], "hover": False, "type": []},
+        {"kind": "screen", "img": IMG["24-rental-home"], "kicker": "Share a rental", "title": "Share a rental car", "caption": "Road trip or moving day — split the car and the cost.", "voice": "Planning a road trip, or a move? Share a rental car, and split the cost.", "click": [37.98, 68.06], "hover": False, "type": [{"x": 8.33, "y": 68.06, "w": 24.95, "text": "SUV from Detroit to Traverse City, 2 of us"}]},
+        {"kind": "screen", "img": IMG["25-rental-form"], "kicker": "Share a rental", "title": "Pick up near you", "caption": "Real rental counters near your pickup, from Google Maps.", "voice": "Along finds real rental counters near your pickup, from Google Maps. Tap one to use it.", "click": [73.38, 33.37], "hover": False, "type": []},
+        {"kind": "screen", "img": IMG["16-rental"], "kicker": "Share a rental", "title": "Return it where you finish", "caption": "Counters near your drop-off, too.", "voice": "And counters near your drop-off, so you can return the car where your trip ends.", "click": [73.24, 23.65], "hover": False, "type": []},
+        {"kind": "screen", "img": IMG["26-rental-vehicle"], "kicker": "Share a rental", "title": "Choose by space", "caption": "From a compact car to a box truck for moving day.", "voice": "Pick a vehicle by the space you need, from a compact car, to a box truck for moving day.", "click": [30.21, 49.96], "hover": False, "type": []},
+        {"kind": "screen", "img": IMG["17-driver"], "kicker": "Share a rental", "title": "Don't drive? No problem", "caption": "Ask for a partner who can drive.", "voice": "Don't drive? Ask for a partner who can. Two non-drivers are never matched.", "click": [76.64, 50.02], "hover": False, "type": []},
+        {"kind": "screen", "img": IMG["27-rental-results"], "kicker": "Share a rental", "title": "Potential rental partners", "caption": "People heading the same way — message to split the car.", "voice": "Then meet rental partners heading the same way, and message them to split the car.", "click": [34.47, 87.68], "hover": False, "type": []},
+        {"kind": "screen", "img": IMG["18-profile"], "kicker": "Step 15", "title": "People you've rated", "caption": "Your journeys and ratings in one place.", "voice": "After the trip, rate your partner anonymously. Everyone you've rated lives on your profile.", "click": [53.2, 47.08], "hover": False, "type": []},
+        {"kind": "screen", "img": IMG["19-rating"], "kicker": "Step 16", "title": "Rate your trip", "caption": "Stars and compliments — edit them anytime.", "voice": "Stars and quick compliments build a trusted community, and you can edit them anytime.", "click": [53.36, 43.61], "hover": False, "type": []},
         {"kind": "outro", "voice": "Along. " + TAGLINE + " Get started today."}
     ];
 }
@@ -261,7 +277,7 @@ def:pub DemoPage() -> JsxElement {
         scene = <div key="start" className="demo-logo demo-start">
             <span className="brand-mark demo-mark"><span /></span>
             <h1>See Along in action</h1>
-            <p>A narrated 3-minute tour of every feature.</p>
+            <p>A narrated 4-minute tour of every feature.</p>
             <div className="demo-cta">
                 <button className="btn btn-primary demo-go" onClick={start}><span className="demo-play">▶</span> Play demo</button>
                 <button className="btn btn-secondary" onClick={lambda (e: MouseEvent) { voice_on = not voice_on; }}>{"Voiceover: on" if voice_on else "Voiceover: off"}</button>
