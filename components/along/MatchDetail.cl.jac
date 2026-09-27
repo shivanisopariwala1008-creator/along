@@ -7,10 +7,10 @@ import from .Icon { Icon }
 import from .AppHeader { AppHeader }
 import from .MapCanvas { MapCanvas }
 import from ...lib.along {
-    flow_info, flow_of_trip, initials, rating_text, has_rating, when_text, fmt_time, plural
+    flow_info, flow_of_trip, initials, rating_text, has_rating, when_text, fmt_time, plural, fmt_date
 }
 sv import from ...services.along {
-    get_match_details, explain_match, close_match, MatchDetailView, MatchCardView, TripView
+    get_match_details, close_match, MatchDetailView, MatchCardView, TripView
 }
 
 # Keyed on the match so moving between matches reloads cleanly.
@@ -23,7 +23,6 @@ def:pub MatchDetailRoute() -> JsxElement {
 def:pub MatchDetail(match_id: str) -> JsxElement {
 
     has detail: MatchDetailView | None = None,
-        explanation: str = "",
         loading: bool = True,
         declining: bool = False;
 
@@ -37,10 +36,6 @@ def:pub MatchDetail(match_id: str) -> JsxElement {
         }
         detail = found;
         loading = False;
-        if found {
-            text = await explain_match(match_id);
-            explanation = text;
-        }
     }
 
     async def decline -> None {
@@ -75,15 +70,6 @@ def:pub MatchDetail(match_id: str) -> JsxElement {
     other = card.other_trip;
     kind = flow_of_trip(mine);
     info = flow_info(kind);
-    capacity = "";
-    if other is not None {
-        if kind == "ride" {
-            capacity = plural(other.seats_available, "seat", "seats");
-        } else {
-            capacity = plural(other.people, "person", "people");
-        }
-    }
-
     return <div className="app-shell">
         <AppHeader progress={True} />
         <main className="detail-page">
@@ -115,35 +101,13 @@ def:pub MatchDetail(match_id: str) -> JsxElement {
                         </div>
                     </div>
                     <div className="detail-section">
-                        <h2>Why this works</h2>
-                        <div className="match-explanation">
-                            <Icon name="check" />
-                            <div>
-                                <strong>{card.fit_label + " · " + str(card.overall_score) + "% overall"}</strong>
-                                <p>{card.why}</p>
-                                {if explanation {
-                                    <p key="ai" className="ai-note">{explanation}</p>
-                                } else {
-                                    <p key="ai-loading" className="ai-note muted">Writing a plain-language summary…</p>
-                                }}
-                            </div>
-                        </div>
+                        <h2>Why it’s a match</h2>
+                        <p className="match-why">{card.why}</p>
                         <div className="stat-grid">
+                            <div><Icon name="pin" /><span><small>Pickup</small><strong>{_pickup_text(card)}</strong></span></div>
                             <div><Icon name="clock" /><span><small>Timing</small><strong>{when_text(card)}</strong></span></div>
-                            <div><Icon name="users" /><span><small>{"Seats" if kind == "ride" else "Group"}</small><strong>{capacity}</strong></span></div>
-                            <div><Icon name="pin" /><span><small>Detour</small><strong>{"+" + str(card.detour_minutes) + " min"}</strong></span></div>
+                            <div><Icon name="star" /><span><small>Rating</small><strong>{rating_text(other)}</strong></span></div>
                         </div>
-                        <div className="score-bars">
-                            <ScoreBar label="Route overlap" value={card.route_score} />
-                            <ScoreBar label="Schedule fit" value={card.time_score} />
-                            <ScoreBar label="Preferences" value={card.preference_score} />
-                            <ScoreBar label="Cost benefit" value={card.cost_benefit_score} />
-                        </div>
-                        {if kind == "ride" or kind == "cab" {
-                            <p key="savings" className="savings-note">
-                                {"Estimated savings: about $" + str(int(card.estimated_rider_savings)) + (" a week" if mine is not None and mine.recurring else " for this trip") + " compared with a private rideshare."}
-                            </p>
-                        }}
                     </div>
                     <div className="detail-section">
                         <h2>Preferences</h2>
@@ -169,33 +133,59 @@ def:pub MatchDetail(match_id: str) -> JsxElement {
                         <div><Icon name="star" /><span><strong>{"Community rated" if has_rating(other) else "New traveler"}</strong><small>{"Ratings are anonymous" if has_rating(other) else "No ratings received yet"}</small></span></div>
                     </div>
                     <button className="btn btn-primary full-button" onClick={lambda (e: MouseEvent) { nav("/chat/" + match_id); }}>
-                        {"Continue conversation" if card.has_conversation else "Start anonymous conversation"}
+                        {"Continue conversation" if card.has_conversation else "Message " + card.other_handle}
                         <Icon name="chat" />
                     </button>
-                    <button className="btn btn-secondary full-button graph-link" onClick={lambda (e: MouseEvent) { nav("/graph/" + match_id); }}>
-                        <Icon name="graph" /> How Along found this
+                    <button className="btn btn-secondary full-button graph-link" onClick={lambda (e: MouseEvent) { nav("/people/" + match_id); }}>
+                        <Icon name="user" /> View profile
                     </button>
-                    <button className="decline-link" onClick={decline} disabled={declining}>{"Closing…" if declining else "Not a match"}</button>
+                    {card.status == "completed" and <button className="btn btn-secondary full-button graph-link" onClick={lambda (e: MouseEvent) { nav("/rate/" + match_id); }}>
+                        <Icon name="star" /> Leave a review
+                    </button>}
+                    <button className="decline-link" onClick={decline} disabled={declining}>{"Removing…" if declining else "Remove match"}</button>
                     <div className="safe-note">
                         <Icon name="lock" />
                         <span>Your full name, exact address, and contact details are never shared without permission.</span>
                     </div>
                 </aside>
             </div>
+            <div className="mobile-cta">
+                <button className="btn btn-primary full-button" onClick={lambda (e: MouseEvent) { nav("/chat/" + match_id); }}>
+                    {"Continue conversation" if card.has_conversation else "Message " + card.other_handle} <Icon name="chat" />
+                </button>
+            </div>
         </main>
     </div>;
+}
+
+def _pickup_text(card: MatchCardView) -> str {
+    if card.pickup_gap_miles < 0 {
+        return "Near your start";
+    }
+    if card.pickup_gap_miles < 1 {
+        return "Under a mile away";
+    }
+    return f"{card.pickup_gap_miles:.1f} mi from your start";
 }
 
 def _preference_chips(t: TripView | None) -> list[str] {
     if t is None {
         return [];
     }
-    chips = ["Age: " + (t.age_pref or "No preference"), "Gender: " + (t.gender_pref or "No preference")];
+    ages = "Any age" if t.age_min <= 1 and t.age_max >= 100 else ("Ages " + str(t.age_min) + "–" + (str(t.age_max) if t.age_max < 100 else "100+"));
+    genders = "Anyone" if len(t.gender_prefs) == 0 else _gender_list(t.gender_prefs);
+    chips = [ages, "Travels with: " + genders];
     chips = chips + (["Smoking OK"] if t.smoking else ["Non-smoking"]);
     if t.mode == "rental" {
         chips = chips + ["Vehicle: " + (t.vehicle or "Flexible")];
+        if t.needs_driver {
+            chips = chips + ["Needs someone to drive"];
+        }
         if t.moving_help {
-            chips = chips + ["Needs moving help"];
+            chips = chips + ["Moving: " + (t.space_needed or "needs cargo space")];
+        }
+        if t.return_date {
+            chips = chips + ["Returns " + fmt_date(t.return_date)];
         }
     }
     if t.recurring {
@@ -210,10 +200,11 @@ def _preference_chips(t: TripView | None) -> list[str] {
     return chips;
 }
 
-def:pub ScoreBar(label: str, value: int) -> JsxElement {
-    return <div className="score-bar">
-        <span>{label}</span>
-        <i><b style={{"width": str(value) + "%"}} /></i>
-        <strong>{str(value) + "%"}</strong>
-    </div>;
+def _gender_list(prefs: list[str]) -> str {
+    names = {"woman": "Women", "man": "Men", "non-binary": "Non-binary"};
+    out = "";
+    for g in prefs {
+        out = out + (", " if out else "") + names.get(g, g);
+    }
+    return out;
 }

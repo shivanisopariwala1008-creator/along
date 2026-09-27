@@ -42,9 +42,45 @@ def _minutes_of_day(hhmm: str) -> int {
     }
 }
 
+# How well two journeys point the same way: 1 = same heading, -1 = opposite.
+# Very short hops have no meaningful heading, so they count as aligned.
+def _heading_cos(a: Trip, b: Trip) -> float {
+    mid = math.radians((a.origin_lat + b.origin_lat) / 2.0);
+    ax = (a.destination_lng - a.origin_lng) * math.cos(mid);
+    ay = a.destination_lat - a.origin_lat;
+    bx = (b.destination_lng - b.origin_lng) * math.cos(mid);
+    by = b.destination_lat - b.origin_lat;
+    na = math.sqrt(ax * ax + ay * ay);
+    nb = math.sqrt(bx * bx + by * by);
+    if na < 0.01 or nb < 0.01 {   # under ~1 km
+        return 1.0;
+    }
+    return (ax * bx + ay * by) / (na * nb);
+}
+
+def _trip_km(t: Trip) -> float {
+    return _haversine_km(t.origin_lat, t.origin_lng, t.destination_lat, t.destination_lng);
+}
+
 def _route_overlap(rider: Trip, driver: Trip) -> dict {
     origin_gap = _haversine_km(rider.origin_lat, rider.origin_lng, driver.origin_lat, driver.origin_lng);
     dest_gap = _haversine_km(rider.destination_lat, rider.destination_lng, driver.destination_lat, driver.destination_lng);
+    if rider.mode == "ride" {
+        # Corridor fit: the extra distance the driver covers to pick the
+        # rider up and drop them off, versus driving their own route.
+        rider_km = _trip_km(rider);
+        driver_km = _trip_km(driver);
+        extra = _haversine_km(driver.origin_lat, driver.origin_lng, rider.origin_lat, rider.origin_lng)
+            + rider_km
+            + _haversine_km(rider.destination_lat, rider.destination_lng, driver.destination_lat, driver.destination_lng)
+            - driver_km;
+        extra = max(0.0, extra);
+        fit = 100.0 * rider_km / max(1.0, rider_km + extra * 1.5);
+        return {
+            "overlap": int(round(max(5.0, min(99.0, fit)))), "detour": max(3, int(round(extra * 1.2)) + 2),
+            "origin_gap": origin_gap, "dest_gap": dest_gap, "extra_km": extra, "driver_km": driver_km
+        };
+    }
     overlap = 100.0 - (origin_gap * 1.6) - (dest_gap * 6.0);
     if overlap < 5.0 { overlap = 5.0; }
     if overlap > 99.0 { overlap = 99.0; }
@@ -53,21 +89,55 @@ def _route_overlap(rider: Trip, driver: Trip) -> dict {
     return {"overlap": int(round(overlap)), "detour": detour, "origin_gap": origin_gap, "dest_gap": dest_gap};
 }
 
-def _time_compat(rider: Trip, driver: Trip) -> int {
-    rider_dep = _minutes_of_day(rider.departure_time);
-    driver_dep = _minutes_of_day(driver.departure_time);
-    diff = abs(rider_dep - driver_dep);
-    window = rider.flexible_minutes + driver.flexible_minutes + 5;
-    if window <= 0 { window = 20; }
-    score = 100.0 - (float(diff) / float(window)) * 60.0;
+# Timing fit from the searcher's point of view (`me`), comparing the moments
+# that actually matter: when a driver reaches the rider's pickup, and — for
+# "arrive by" trips — whether the rider gets there on time.
+#   delta < 0: the other person is earlier than you; delta > 0: later.
+# Closest time wins; a little earlier beats the same amount later, and being
+# late for an arrive-by deadline costs the most. Returns {score, delta}.
+def _time_fit(me: Trip, other: Trip) -> dict {
+    mine = _minutes_of_day(me.departure_time);
+    theirs = _minutes_of_day(other.departure_time);
+    deadline_trip: Trip | None = None;
+    if me.mode == "ride" and me.role == "RIDER" {
+        theirs += int(round(_haversine_km(other.origin_lat, other.origin_lng, me.origin_lat, me.origin_lng) * 1.1));
+        if me.time_preference == "arrive_by" and me.arrival_deadline {
+            deadline_trip = me;
+        }
+    } elif me.mode == "ride" and me.role == "DRIVER" {
+        mine += int(round(_haversine_km(me.origin_lat, me.origin_lng, other.origin_lat, other.origin_lng) * 1.1));
+        if other.time_preference == "arrive_by" and other.arrival_deadline {
+            deadline_trip = other;
+        }
+    }
+    score = 100.0;
+    delta = theirs - mine;
+    if deadline_trip is not None {
+        # Driver time at the pickup + the rider's own leg (~55 km/h) + a few minutes.
+        pickup = theirs if me.role == "RIDER" else mine;
+        dt = deadline_trip as Trip;
+        arrive = pickup + int(round(_trip_km(dt) * 1.1)) + 5;
+        delta = arrive - _minutes_of_day(dt.arrival_deadline);
+        if delta <= 0 {
+            score = 100.0 - max(0, -delta - 25) * 0.7;      # early is fine; very early costs a little
+        } else {
+            score = 90.0 - delta * 3.0;                      # late for a deadline costs the most
+        }
+    } else {
+        free = 30 if me.mode == "rental" else 10;
+        over = max(0, abs(delta) - free);
+        rate = 0.9 if delta < 0 else 1.5;                    # a bit earlier beats a bit later
+        if me.mode == "rental" {
+            rate = rate / 2.0;                               # rentals are for the whole day
+        }
+        score = 100.0 - over * rate;
+    }
     # Only two recurring commutes can disagree on their weekly schedule.
-    if rider.recurring and driver.recurring
-        and rider.recurrence_days.strip().lower() != driver.recurrence_days.strip().lower() {
+    if me.recurring and other.recurring
+        and me.recurrence_days.strip().lower() != other.recurrence_days.strip().lower() {
         score -= 15.0;
     }
-    if score < 10.0 { score = 10.0; }
-    if score > 100.0 { score = 100.0; }
-    return int(round(score));
+    return {"score": int(round(max(10.0, min(100.0, score)))), "delta": delta};
 }
 
 def _preference_compat(rider_pref: Preference, driver_pref: Preference) -> int {
@@ -94,10 +164,17 @@ def _cost_benefit(rider: Trip, driver: Trip, origin_gap: float, dest_gap: float)
     return {"rider_savings": weekly, "driver_contribution": driver_contribution, "score": cost_score};
 }
 
-def _score_match(route_overlap: int, detour: int, time_score: int, pref_score: int, cost_score: int) -> int {
+glob DEFAULT_WEIGHTS: dict[str, float] = {"route": 0.35, "time": 0.25, "detour": 0.15, "pref": 0.15, "cost": 0.10},
+     LEARN_AFTER: int = 5;        # connections needed before the weights start to move
+
+def _score_match(route_overlap: int, detour: int, time_score: int, pref_score: int, cost_score: int, w: dict[str, float] = {}) -> int {
     detour_score = 100 - (detour * 5);
     if detour_score < 0 { detour_score = 0; }
-    overall = (route_overlap * 0.35) + (time_score * 0.25) + (detour_score * 0.15) + (pref_score * 0.15) + (cost_score * 0.10);
+    wt = w if len(w) else DEFAULT_WEIGHTS;
+    overall = (route_overlap * wt["route"]) + (time_score * wt["time"]) + (detour_score * wt["detour"])
+        + (pref_score * wt["pref"]) + (cost_score * wt["cost"]);
+    # A perfect route at the wrong time isn't a good match: timing scales the whole score.
+    overall = overall * (0.55 + 0.45 * time_score / 100.0);
     if overall > 99 { overall = 99; }
     return int(round(overall));
 }
@@ -124,8 +201,27 @@ def _me() -> User {
     return user;
 }
 
+# Friendly anonymous name ("Maple Fox"), stable per user and the same whether
+# they ride or drive. Hides identity without sounding like a ticket number.
+glob HANDLE_WORDS_A: list[str] = [
+    "Maple", "Cedar", "River", "Harbor", "Lake", "Birch", "Willow", "Aspen",
+    "Pine", "Meadow", "Prairie", "Summit", "Canyon", "Coral", "Amber", "Ivory",
+    "Sage", "Juniper", "Hazel", "Clover", "Indigo", "Copper", "Silver", "Golden",
+    "Misty", "Sunny", "Breezy", "Quiet", "Swift", "Gentle", "Bright", "Lucky"
+],
+     HANDLE_WORDS_B: list[str] = [
+    "Fox", "Heron", "Otter", "Robin", "Finch", "Sparrow", "Falcon", "Owl",
+    "Deer", "Hare", "Badger", "Beaver", "Lynx", "Wren", "Swan", "Crane",
+    "Bison", "Moose", "Loon", "Trout", "Maple", "Comet", "Pebble", "Harbor",
+    "Lantern", "Compass", "Meadow", "Brook", "Aspen", "Spruce", "Cardinal", "Kestrel"
+];
+
+def _friendly_name(n: int) -> str {
+    return HANDLE_WORDS_A[n % 32] + " " + HANDLE_WORDS_B[(n // 32) % 32];
+}
+
 def _handle_for(me: User, role: str) -> str {
-    return ("Driver " if role == "DRIVER" else "Rider ") + str(me.handle_number);
+    return _friendly_name(me.handle_number);
 }
 
 def _now() -> str {
@@ -144,6 +240,7 @@ def _profile_view(me: User) -> ProfileView {
         display_name=me.display_name, home_region=me.home_region,
         rider_handle=_handle_for(me, "RIDER"), driver_handle=_handle_for(me, "DRIVER"),
         verified=me.verified, phone=me.phone, member_since=me.member_since,
+        age=me.age, gender=me.gender,
         # Only whether feedback exists — never your own score (Figma: "Your view").
         has_ratings=_rating_summary(_my_root_id())[1] > 0,
         completed_connections=me.completed_connections
@@ -151,14 +248,22 @@ def _profile_view(me: User) -> ProfileView {
 }
 
 impl get_my_profile() -> ProfileView {
+    _sync_email_verified();
     return _profile_view(_me());
 }
 
-impl update_profile_details(display_name: str, home_region: str, phone: str) -> ProfileView {
+impl update_profile_details(display_name: str, home_region: str, phone: str, age: int = 0, gender: str = "") -> ProfileView {
     me = _me();
     me.display_name = display_name.strip()[:60];
     me.home_region = home_region.strip()[:60];
     me.phone = phone.strip()[:30];
+    me.age = age if 0 <= age <= 120 else 0;
+    me.gender = gender if gender in ["woman", "man", "non-binary"] else "";
+    # Keep my journeys' matcher-only snapshot in step with the profile.
+    for t in [me ->:Posts:->][?:Trip] {
+        t.owner_age = me.age;
+        t.owner_gender = me.gender;
+    }
     return _profile_view(me);
 }
 
@@ -209,77 +314,116 @@ def _make_trip(
 # Demo people for each Figma flow. Seeded per handle, so re-running only fills gaps.
 glob DEMO_PEOPLE: list[dict] = [
     # Drivers heading toward Ann Arbor ("Find a ride")
-    {"handle": "MapleDriver", "name": "Marcus", "role": "DRIVER", "mode": "ride", "from": "Flint, MI",
+    {"handle": "MapleDriver", "age": 34, "gender": "man", "name": "Marcus", "role": "DRIVER", "mode": "ride", "from": "Flint, MI",
      "to": "Ann Arbor, MI", "dep": "07:40", "arr": "09:05", "seats": 2, "rating": 4.9, "reviews": 28,
      "note": "Drive this route every weekday, happy to pick up on the way."},
-    {"handle": "NorthStar22", "name": "Nadia", "role": "DRIVER", "mode": "ride", "from": "Fenton, MI",
+    {"handle": "NorthStar22", "age": 27, "gender": "woman", "name": "Nadia", "role": "DRIVER", "mode": "ride", "from": "Fenton, MI",
      "to": "Ann Arbor, MI", "dep": "08:05", "arr": "09:00", "seats": 3, "rating": 4.8, "reviews": 16,
      "note": "Leaving from Fenton Rd, quiet ride preferred."},
-    {"handle": "MorningMiles", "name": "Theo", "role": "DRIVER", "mode": "ride", "from": "Holly, MI",
+    {"handle": "MorningMiles", "age": 45, "gender": "man", "name": "Theo", "role": "DRIVER", "mode": "ride", "from": "Holly, MI",
      "to": "Ann Arbor, MI", "dep": "08:20", "arr": "09:15", "seats": 1, "rating": 0.0, "reviews": 0,
      "note": "New to Along, flexible by 20 minutes."},
     # Riders looking for a lift ("Find a buddy")
-    {"handle": "GardenRider", "name": "Priya", "role": "RIDER", "mode": "ride", "from": "Grand Blanc, MI",
+    {"handle": "GardenRider", "age": 52, "gender": "woman", "name": "Priya", "role": "RIDER", "mode": "ride", "from": "Grand Blanc, MI",
      "to": "Ann Arbor, MI", "dep": "07:35", "arr": "09:15", "seats": 0, "rating": 4.9, "reviews": 11,
      "note": "Need to be at the office by 9:15."},
-    {"handle": "CampusBound", "name": "Devon", "role": "RIDER", "mode": "ride", "from": "Fenton, MI",
+    {"handle": "CampusBound", "age": 23, "gender": "man", "name": "Devon", "role": "RIDER", "mode": "ride", "from": "Fenton, MI",
      "to": "Ann Arbor, MI", "dep": "07:20", "arr": "08:30", "seats": 0, "rating": 4.7, "reviews": 8,
      "note": "Heading to campus, two of us."},
-    {"handle": "EarlyRobin", "name": "Sam", "role": "RIDER", "mode": "ride", "from": "Holly, MI",
+    {"handle": "EarlyRobin", "age": 38, "gender": "non-binary", "name": "Sam", "role": "RIDER", "mode": "ride", "from": "Holly, MI",
      "to": "Ann Arbor, MI", "dep": "07:50", "arr": "09:00", "seats": 0, "rating": 0.0, "reviews": 0,
      "note": "Flexible by 20 minutes."},
-    {"handle": "LakeLooper", "name": "Jordan", "role": "RIDER", "mode": "ride", "from": "Howell, MI",
+    {"handle": "LakeLooper", "age": 61, "gender": "man", "name": "Jordan", "role": "RIDER", "mode": "ride", "from": "Howell, MI",
      "to": "Ann Arbor, MI", "dep": "07:15", "arr": "08:50", "seats": 0, "rating": 4.6, "reviews": 5,
      "note": "Looking for a regular carpool."},
-    {"handle": "YpsiCommuter", "name": "Casey", "role": "RIDER", "mode": "ride", "from": "Ypsilanti, MI",
+    {"handle": "YpsiCommuter", "age": 29, "gender": "woman", "name": "Casey", "role": "RIDER", "mode": "ride", "from": "Ypsilanti, MI",
      "to": "Detroit, MI", "dep": "07:45", "arr": "09:00", "seats": 0, "rating": 4.8, "reviews": 9,
      "note": "Looking for a regular carpool."},
     # Rental partners ("Rent together")
-    {"handle": "MovingNorth", "name": "Alexis", "role": "PEER", "mode": "rental", "from": "Novi, MI",
-     "to": "Detroit, MI", "dep": "09:00", "arr": "", "seats": 0, "people": 2, "vehicle": "Pickup",
+    {"handle": "MovingNorth", "age": 41, "gender": "woman", "name": "Alexis", "role": "PEER", "mode": "rental", "from": "Novi, MI",
+     "to": "Detroit, MI", "dep": "09:00", "arr": "", "seats": 0, "people": 2, "vehicle": "Pickup truck",
      "moving": True, "rating": 4.8, "reviews": 6, "note": "Also moving and needs cargo room."},
-    {"handle": "WeekendWay", "name": "Riley", "role": "PEER", "mode": "rental", "from": "Farmington Hills, MI",
+    {"handle": "WeekendWay", "age": 31, "gender": "woman", "name": "Riley", "role": "PEER", "mode": "rental", "from": "Farmington Hills, MI",
      "to": "Detroit, MI", "dep": "10:00", "arr": "", "seats": 0, "people": 1, "vehicle": "SUV",
      "moving": False, "rating": 4.9, "reviews": 14, "note": "Weekend trip, flexible dates."},
-    {"handle": "LakeTrip", "name": "Morgan", "role": "PEER", "mode": "rental", "from": "Livonia, MI",
+    {"handle": "LakeTrip", "age": 26, "gender": "non-binary", "name": "Morgan", "role": "PEER", "mode": "rental", "from": "Livonia, MI",
      "to": "Detroit, MI", "dep": "13:00", "arr": "", "seats": 0, "people": 2, "vehicle": "Minivan",
      "moving": False, "rating": 0.0, "reviews": 0, "note": "Flexible timing."},
     # Cab sharers ("Share a cab")
-    {"handle": "WindowSeat", "name": "Jamie", "role": "PEER", "mode": "cab", "from": "Detroit Metro Airport",
+    {"handle": "WindowSeat", "age": 48, "gender": "woman", "name": "Jamie", "role": "PEER", "mode": "cab", "from": "Detroit Metro Airport",
      "to": "Downtown Detroit", "dep": "18:10", "arr": "", "seats": 0, "people": 1, "rating": 4.9,
      "reviews": 21, "note": "Landing at McNamara Terminal."},
-    {"handle": "CityLight", "name": "Avery", "role": "PEER", "mode": "cab", "from": "Detroit Metro Airport",
+    {"handle": "CityLight", "age": 36, "gender": "man", "name": "Avery", "role": "PEER", "mode": "cab", "from": "Detroit Metro Airport",
      "to": "Midtown Detroit", "dep": "18:30", "arr": "", "seats": 0, "people": 2, "rating": 4.7,
      "reviews": 9, "note": "Evans Terminal pickup."},
-    {"handle": "CarryOnOnly", "name": "Quinn", "role": "PEER", "mode": "cab", "from": "Romulus, MI",
+    {"handle": "CarryOnOnly", "age": 57, "gender": "non-binary", "name": "Quinn", "role": "PEER", "mode": "cab", "from": "Romulus, MI",
      "to": "Downtown Detroit", "dep": "18:15", "arr": "", "seats": 0, "people": 1, "rating": 0.0,
      "reviews": 0, "note": "Airport hotel, carry-on only."},
+    # Cab shares heading TO the airport, so common trips have relevant partners.
+    {"handle": "AirportRun", "age": 24, "gender": "man", "name": "Kai", "role": "PEER", "mode": "cab", "from": "Ann Arbor, MI",
+     "to": "Detroit Metro Airport", "dep": "06:30", "arr": "", "seats": 0, "people": 1, "rating": 4.8,
+     "reviews": 12, "note": "Early flight, one suitcase."},
+    {"handle": "RunwayReady", "age": 43, "gender": "man", "name": "Lou", "role": "PEER", "mode": "cab", "from": "Ann Arbor, MI",
+     "to": "Detroit Metro Airport", "dep": "07:10", "arr": "", "seats": 0, "people": 2, "rating": 0.0,
+     "reviews": 0, "note": "Two of us, carry-ons only."},
+    {"handle": "GateBound", "age": 33, "gender": "woman", "name": "Rae", "role": "PEER", "mode": "cab", "from": "Novi, MI",
+     "to": "Detroit Metro Airport", "dep": "06:45", "arr": "", "seats": 0, "people": 1, "rating": 4.9,
+     "reviews": 5, "note": "Happy to split from Novi."},
+    {"handle": "TerminalHop", "age": 39, "gender": "man", "name": "Ash", "role": "PEER", "mode": "cab", "from": "Downtown Detroit",
+     "to": "Detroit Metro Airport", "dep": "17:00", "arr": "", "seats": 0, "people": 1, "rating": 4.6,
+     "reviews": 7, "note": "Evening flight from downtown."},
 ];
 
 impl seed_demo_network() -> str {
-    present = set([t.owner_handle for t in _public_trips() if t.is_demo]);
+    import from services.demo_network { demo_network }
+    existing: dict[str, Trip] = {};
+    for t in _public_trips() {
+        if t.is_demo {
+            existing[t.owner_handle] = t;
+        }
+    }
     added = 0;
-    for p in DEMO_PEOPLE {
+    for p in DEMO_PEOPLE + demo_network([d["handle"] as str for d in DEMO_PEOPLE]) {
         handle = p["handle"] as str;
-        if handle in present {
+        mode = p["mode"] as str;
+        origin = [p["from_lat"] as float, p["from_lng"] as float] if "from_lat" in p else _town_coords(p["from"] as str);
+        dest = [p["to_lat"] as float, p["to_lng"] as float] if "to_lat" in p else _town_coords(p["to"] as str);
+        arrive = p["arr"] as str;
+        if not arrive {
+            km = _haversine_km(origin[0], origin[1], dest[0], dest[1]);
+            arrive = _hhmm_shift(p["dep"] as str, int(round(km * 1.3 / 70.0 * 60.0)) + 8);
+        }
+        if handle in existing {
+            # Keep already-seeded people in step with the table.
+            t = existing[handle];
+            t.owner_age = p["age"] as int;
+            t.owner_gender = p["gender"] as str;
+            t.demo_name = p["name"] as str;
+            t.departure_time = p["dep"] as str;
+            t.arrival_deadline = arrive;
             continue;
         }
-        mode = p["mode"] as str;
-        origin = _town_coords(p["from"] as str);
-        dest = _town_coords(p["to"] as str);
+        recurring: bool = (p["recurring"] as bool) if "recurring" in p else mode == "ride";
         trip = _make_trip(
             handle, "demo", p["role"] as str, p["from"] as str, origin[0], origin[1],
-            p["to"] as str, dest[0], dest[1], p["dep"] as str, p["arr"] as str,
-            mode == "ride", "Mon-Fri" if mode == "ride" else "", 20, p["seats"] as int,
+            p["to"] as str, dest[0], dest[1], p["dep"] as str, arrive,
+            recurring, "Mon-Fri" if recurring else "", 20, p["seats"] as int,
             10 if p["role"] == "DRIVER" else 0, False, False, True, "moderate",
             p["note"] as str, 20.0 if p["role"] == "RIDER" else 10.0, True, p["name"] as str
         );
+        if "gender_prefs" in p {
+            trip.gender_prefs = p["gender_prefs"] as list[str];
+            trip.age_min = p["age_min"] as int;
+            trip.age_max = p["age_max"] as int;
+        }
         trip.mode = mode;
         trip.people = (p["people"] as int) if "people" in p else 1;
         trip.vehicle = (p["vehicle"] as str) if "vehicle" in p else "";
         trip.moving_help = (p["moving"] as bool) if "moving" in p else False;
         trip.demo_rating = p["rating"] as float;
         trip.demo_reviews = p["reviews"] as int;
+        trip.owner_age = p["age"] as int;
+        trip.owner_gender = p["gender"] as str;
         added += 1;
     }
     if added == 0 {
@@ -297,7 +441,8 @@ glob TOWNS: dict[str, list[float]] = {
     "holly": [42.7917, -83.6277], "livonia": [42.3684, -83.3527],
     "farmington hills": [42.4990, -83.3677], "romulus": [42.2223, -83.3966],
     "detroit metro airport": [42.2162, -83.3554], "dtw": [42.2162, -83.3554],
-    "airport": [42.2162, -83.3554], "downtown detroit": [42.3314, -83.0458],
+    "airport": [42.2162, -83.3554], "detroit metropolitan": [42.2162, -83.3554],
+    "wayne county airport": [42.2162, -83.3554], "downtown detroit": [42.3314, -83.0458],
     "midtown detroit": [42.3569, -83.0663], "dearborn": [42.3223, -83.1763],
     "troy": [42.6064, -83.1498], "royal oak": [42.4895, -83.1446],
     "southfield": [42.4734, -83.2219], "pontiac": [42.6389, -83.2910],
@@ -339,11 +484,11 @@ def _maps_key() -> str {
     return os.environ.get("GOOGLE_MAPS_API_KEY", "").strip();
 }
 
-def _http_json(url: str, body: dict | None, headers: dict[str, str]) -> dict | None {
+def _http_json(url: str, body: dict | None, headers: dict[str, str], timeout: int = 8) -> dict | None {
     data = json.dumps(body).encode("utf-8") if body is not None else None;
     req = Request(url, data=data, headers=headers, method="POST" if body is not None else "GET");
     try {
-        with urlopen(req, timeout=8) as resp {
+        with urlopen(req, timeout=timeout) as resp {
             return json.loads(resp.read().decode("utf-8"));
         }
     } except Exception as e {
@@ -488,6 +633,14 @@ impl create_trip(
     return jid(trip);
 }
 
+def _as_float(v: any) -> float {
+    try {
+        return float(v);
+    } except Exception {
+        return 0.0;
+    }
+}
+
 def _hhmm_shift(hhmm: str, minutes: int) -> str {
     total = (_minutes_of_day(hhmm) + minutes) % (24 * 60);
     return f"{total // 60:02d}:{total % 60:02d}";
@@ -500,9 +653,20 @@ impl create_journey(
     vehicle: str, moving_help: bool, age_pref: str, gender_pref: str, notes: str,
     origin_lat: float = 0.0, origin_lng: float = 0.0,
     destination_lat: float = 0.0, destination_lng: float = 0.0,
-    round_trip: bool = False
+    round_trip: bool = False, return_date: str = "", space_needed: str = "",
+    age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = [], needs_driver: bool = False
 ) -> str {
     me = _me();
+    # Omitted optional arguments can arrive as strings over HTTP; normalise them.
+    origin_lat = _as_float(origin_lat);
+    origin_lng = _as_float(origin_lng);
+    destination_lat = _as_float(destination_lat);
+    destination_lng = _as_float(destination_lng);
+    round_trip = round_trip in [True, "True", "true"];
+    needs_driver = needs_driver in [True, "True", "true"];
+    age_min = int(age_min) if str(age_min).isdigit() else 1;
+    age_max = int(age_max) if str(age_max).isdigit() else 100;
+    gender_prefs = gender_prefs if isinstance(gender_prefs, list) else [];
     clean_mode = mode if mode in ["ride", "rental", "cab"] else "ride";
     clean_role = ("DRIVER" if role == "DRIVER" else "RIDER") if clean_mode == "ride" else "PEER";
     origin_coords = [origin_lat, origin_lng] if (origin_lat and origin_lng) else _town_coords(origin_name);
@@ -535,16 +699,37 @@ impl create_journey(
     trip.pickup_distance = pickup_distance.strip()[:30];
     trip.age_pref = age_pref.strip()[:30] or "No preference";
     trip.gender_pref = gender_pref.strip()[:30] or "No preference";
-    trip.round_trip = round_trip;
+    trip.round_trip = round_trip if clean_mode != "rental" else False;
+    trip.age_min = max(1, min(age_min, 100));
+    trip.age_max = max(trip.age_min, min(age_max, 100));
+    trip.gender_prefs = [g for g in gender_prefs if g in ["woman", "man", "non-binary"]];
+    trip.owner_age = me.age;
+    trip.owner_gender = me.gender;
+    trip.return_date = return_date.strip()[:10] if clean_mode == "rental" else "";
+    trip.space_needed = space_needed.strip()[:40] if clean_mode == "rental" and moving_help else "";
+    trip.needs_driver = needs_driver and clean_mode == "rental";
     me +>:Posts:+> trip;
 
-    # Make sure there is always someone to match with in the demo.
-    seed_demo_network();
+    # A search stays private; post_journey publishes it and notifies matches.
     return jid(trip);
 }
 
 impl get_my_trips() -> list[TripView] {
-    return [_trip_view(t) for t in [_me() ->:Posts:->][?:Trip] if t.active];
+    return [_trip_view(t) for t in [_me() ->:Posts:->][?:Trip] if t.active and t.posted];
+}
+
+impl remove_journey(trip_id: str) -> bool {
+    t = _load_trip(trip_id);
+    if t is None or (t as Trip).owner_root != _my_root_id() {
+        return False;
+    }
+    (t as Trip).active = False;
+    for m in _my_matches() {
+        if (m.rider_trip_id == trip_id or m.driver_trip_id == trip_id) and m.status == "suggested" {
+            m.status = "closed";
+        }
+    }
+    return True;
 }
 
 impl get_my_trip(trip_id: str) -> TripView | None {
@@ -594,7 +779,10 @@ def _trip_view(t: Trip) -> TripView {
         recurring=t.recurring, smoking=_preference_of(t).smoking,
         origin_lat=t.origin_lat, origin_lng=t.origin_lng,
         destination_lat=t.destination_lat, destination_lng=t.destination_lng,
-        owner_rating=rating[0], owner_reviews=rating[1], round_trip=t.round_trip
+        owner_rating=rating[0], owner_reviews=rating[1], round_trip=t.round_trip,
+        return_date=t.return_date, space_needed=t.space_needed, needs_driver=t.needs_driver,
+        posted=t.posted, expired=_is_expired(t),
+        age_min=t.age_min, age_max=t.age_max, gender_prefs=t.gender_prefs
     );
 }
 
@@ -627,7 +815,11 @@ def _is_participant(m: Match) -> bool {
 }
 
 def _my_matches() -> list[Match] {
-    return [m for m in [root.shared-->][?:Match] if _is_participant(m)];
+    hidden = _blocked_keys();
+    return [
+        m for m in [root.shared-->][?:Match]
+        if _is_participant(m) and _other_key(m) not in hidden
+    ];
 }
 
 # Resolve a match id — only if the caller is one of its two participants.
@@ -637,7 +829,7 @@ def _find_match(match_id: str) -> Match | None {
     } except Exception {
         return None;
     }
-    if isinstance(obj_, Match) and _is_participant(obj_ as Match) {
+    if isinstance(obj_, Match) and _is_participant(obj_ as Match) and not _match_blocked(obj_ as Match) {
         return obj_ as Match;
     }
     return None;
@@ -665,19 +857,42 @@ def _why_text(m: Match, mine: Trip | None, other: Trip | None) -> str {
     ot = other as Trip;
     gap = m.pickup_gap_miles;
     near = "close to" if gap >= 0 and gap < 4 else ("a short hop from" if gap >= 0 and gap < 12 else "within reach of");
+    text = "";
     if m.mode == "ride" and ot.role == "DRIVER" {
-        return f"Their {ot.origin_name.split(',')[0]} → {ot.destination_name.split(',')[0]} route passes {near} {me_t.origin_name.split(',')[0]}, adding about {m.detour_minutes} min.";
-    }
-    if m.mode == "ride" {
-        return f"Their pickup area in {ot.origin_name.split(',')[0]} is {near} your route, about a {m.detour_minutes}-minute detour.";
-    }
-    if m.mode == "rental" {
+        text = f"Their {ot.origin_name.split(',')[0]} → {ot.destination_name.split(',')[0]} route passes {near} {me_t.origin_name.split(',')[0]}, adding about {m.detour_minutes} min.";
+    } elif m.mode == "ride" {
+        text = f"Their pickup area in {ot.origin_name.split(',')[0]} is {near} your route, about a {m.detour_minutes}-minute detour.";
+    } elif m.mode == "rental" {
         extra = " and needs cargo room" if ot.moving_help else "";
         vehicle = f" ({ot.vehicle})" if ot.vehicle else "";
-        return f"Also heading from {ot.origin_name.split(',')[0]} toward {ot.destination_name.split(',')[0]}{vehicle}{extra}.";
+        driver = " They'd like someone to do the driving." if ot.needs_driver else "";
+        text = f"Also heading from {ot.origin_name.split(',')[0]} toward {ot.destination_name.split(',')[0]}{vehicle}{extra}.{driver}";
+    } else {
+        text = f"A destination near {ot.destination_name.split(',')[0]}; their start is {near} yours.";
     }
-    return f"Similar timing and a destination near {ot.destination_name.split(',')[0]}; their start is {near} yours.";
+    return text + " " + _timing_sentence(me_t, ot);
 }
+
+# One plain sentence about timing, from my side of the match.
+def _timing_sentence(me: Trip, other: Trip) -> str {
+    fit = _time_fit(me, other);
+    delta = fit["delta"] as int;
+    deadline = (me.role == "RIDER" and me.time_preference == "arrive_by" and me.arrival_deadline)
+        or (me.role == "DRIVER" and other.time_preference == "arrive_by" and other.arrival_deadline);
+    if me.mode == "ride" and deadline {
+        if delta <= 0 {
+            return "Gets you there on time." if me.role == "RIDER" else "You'd get them there on time.";
+        }
+        return f"Would arrive about {delta} min late — message them to agree on an earlier time.";
+    }
+    if abs(delta) <= 10 {
+        return "Your times line up.";
+    }
+    side = "earlier" if delta < 0 else "later";
+    return f"They're about {abs(delta)} min {side} than you — message them to agree on a time.";
+}
+
+glob AGENT_ORDER: list[str] = ["Route Scout", "Schedule Agent", "Trust Agent", "Cost Agent", "Coordinator"];
 
 def _match_to_card(m: Match) -> MatchCardView {
     rider_trip = _load_trip(m.rider_trip_id);
@@ -696,7 +911,12 @@ def _match_to_card(m: Match) -> MatchCardView {
         other_trip=_trip_view(other) if other is not None else None,
         mode=m.mode, fit_label=_fit_label(m), why=_why_text(m, mine, other),
         other_handle=m.driver_handle if i_am_rider else m.rider_handle,
-        has_conversation=_find_conversation(m) is not None
+        has_conversation=_find_conversation(m) is not None,
+        pickup_gap_miles=m.pickup_gap_miles,
+        agent_notes=[
+            AgentNoteView(agent=name, note=m.agent_notes[name])
+            for name in AGENT_ORDER if name in m.agent_notes
+        ]
     );
 }
 
@@ -706,6 +926,68 @@ def _card_score(c: MatchCardView) -> int {
 
 def _sort_cards(cards: list[MatchCardView]) -> list[MatchCardView] {
     return sorted(cards, key=_card_score, reverse=True);
+}
+
+# ---------------------------------------------------------------------------
+# Learning the weights. Each component a person actually connects on is
+# compared with what we showed them: components that are consistently higher
+# in chosen matches gain weight (at most ±40% of the default), the rest lose
+# a little, and the weights are renormalised to sum to 1.
+# ---------------------------------------------------------------------------
+
+def _learned() -> LearnedWeights {
+    for lw in [root.shared-->][?:LearnedWeights] {
+        return lw;
+    }
+    lw = LearnedWeights();
+    root.shared ++> lw;
+    grant(lw, level=WritePerm);
+    return lw;
+}
+
+def _components(route: int, detour: int, time: int, pref: int, cost: int) -> dict[str, float] {
+    return {
+        "route": float(route), "time": float(time), "detour": float(max(0, 100 - detour * 5)),
+        "pref": float(pref), "cost": float(cost)
+    };
+}
+
+def _add_to(totals: dict[str, float], parts: dict[str, float]) -> dict[str, float] {
+    out: dict[str, float] = dict(totals);
+    for (k, v) in parts.items() {
+        out[k] = out.get(k, 0.0) + v;
+    }
+    return out;
+}
+
+def _current_weights() -> dict[str, float] {
+    lw = _learned();
+    if lw.chosen < LEARN_AFTER or lw.shown == 0 {
+        return DEFAULT_WEIGHTS;
+    }
+    raw: dict[str, float] = {};
+    for (k, base) in DEFAULT_WEIGHTS.items() {
+        chosen_avg = lw.chosen_sum.get(k, 0.0) / lw.chosen;
+        shown_avg = lw.shown_sum.get(k, 0.0) / lw.shown;
+        lift = max(-0.4, min(0.4, (chosen_avg - shown_avg) / 50.0));
+        raw[k] = base * (1.0 + lift);
+    }
+    total = sum(raw.values());
+    return {k: v / total for (k, v) in raw.items()};
+}
+
+def _record_shown(cands: list[Candidate]) -> None {
+    lw = _learned();
+    for c in cands[:5] {
+        lw.shown_sum = _add_to(lw.shown_sum, _components(c.route_score, c.detour, c.time_score, c.preference_score, c.cost_score));
+        lw.shown += 1;
+    }
+}
+
+def _record_chosen(m: Match) -> None {
+    lw = _learned();
+    lw.chosen_sum = _add_to(lw.chosen_sum, _components(m.route_score, m.detour_minutes, m.time_score, m.preference_score, m.cost_benefit_score));
+    lw.chosen += 1;
 }
 
 def _impact_record() -> ImpactRecord {
@@ -718,74 +1000,309 @@ def _impact_record() -> ImpactRecord {
     return rec;
 }
 
-impl run_matching(trip_id: str) -> list[MatchCardView] {
-    origin = _load_trip(trip_id);
-    me = _my_root_id();
-    if origin is None or (origin as Trip).owner_root != me {
-        return [];   # you can only run matching for your own trip
-    }
-    o = origin as Trip;
-    # Rides pair opposite roles; rentals and cabs pair peers of the same mode.
-    is_peer = o.role == "PEER";
-    wanted_role = "PEER" if is_peer else ("DRIVER" if o.role == "RIDER" else "RIDER");
+# ---------------------------------------------------------------------------
+# The matching agents (walkers declared in along.jac)
+# ---------------------------------------------------------------------------
 
+# Rides pair a rider with a driver; rentals/cabs pair peers, and the searcher
+# sits on the "rider" side of the Match.
+def _pair(me: Trip, other: Trip) -> tuple[Trip, Trip] {
+    if me.role == "RIDER" or me.role == "PEER" {
+        return (me, other);
+    }
+    return (other, me);
+}
+
+def _candidate_index(cands: list[Candidate]) -> dict[str, Candidate] {
+    return {c.trip_id: c for c in cands};
+}
+
+def _origin_trip(origin_id: str) -> Trip {
+    return _load_trip(origin_id) as Trip;
+}
+
+impl RouteScout.start {
+    visit [here-->][?:Trip];
+}
+
+impl RouteScout.inspect {
+    self.scanned += 1;
+    o = _origin_trip(self.origin_id);
+    wanted = "PEER" if o.role == "PEER" else ("DRIVER" if o.role == "RIDER" else "RIDER");
+    if not _is_listed(here) or here.role != wanted or here.mode != o.mode
+        or jid(here) == self.origin_id or here.owner_root == self.my_root
+        or _ratee_key(here.owner_root, here.owner_handle) in self.blocked {
+        skip;
+    }
+    pair = _pair(o, here);
+    route = _route_overlap(pair[0], pair[1]);
+    # Hard gates first: only genuinely relevant journeys, and only people whose
+    # preferences fit both ways. Scores never rescue an irrelevant journey.
+    if not _relevant(o, here, route) or not _prefs_fit(o, here) {
+        skip;
+    }
+    if o.mode == "cab" {
+        # A shared cab needs the same start and a nearby drop-off.
+        og: float = route["origin_gap"] as float;
+        dg: float = route["dest_gap"] as float;
+        route["overlap"] = max(5, min(99, int(round(100 - og * 8 - dg * 5))));
+    }
+    c = Candidate(
+        trip_id=jid(here), handle=here.owner_handle, owner_root=here.owner_root,
+        route_score=route["overlap"] as int, detour=route["detour"] as int,
+        origin_gap_km=route["origin_gap"] as float, dest_gap_km=route["dest_gap"] as float
+    );
+    gap_mi: float = (route["origin_gap"] as float) * 0.621371;
+    c.notes["Route Scout"] = f"{c.route_score}% corridor overlap · starts {gap_mi:.1f} mi from you";
+    self.candidates.append(c);
+}
+
+impl ScheduleAgent.start {
+    visit [jobj(c.trip_id) for c in self.candidates];
+}
+
+impl ScheduleAgent.inspect {
+    c = _candidate_index(self.candidates).get(jid(here));
+    if c is None {
+        skip;
+    }
+    fit = _time_fit(_origin_trip(self.origin_id), here);
+    c.time_score = fit["score"] as int;
+    c.time_delta = fit["delta"] as int;
+    c.time_gap_min = abs(c.time_delta);
+    when = "on time" if c.time_gap_min <= 5 else (f"{c.time_gap_min} min " + ("earlier" if c.time_delta < 0 else "later"));
+    c.notes["Schedule Agent"] = f"{c.time_score}% schedule fit · {when}";
+}
+
+impl TrustAgent.start {
+    visit [jobj(c.trip_id) for c in self.candidates];
+}
+
+impl TrustAgent.inspect {
+    c = _candidate_index(self.candidates).get(jid(here));
+    if c is None {
+        skip;
+    }
+    pair = _pair(_origin_trip(self.origin_id), here);
+    c.preference_score = _preference_compat(_preference_of(pair[0]), _preference_of(pair[1]));
+    rep = _rating_summary(_ratee_key(here.owner_root, here.owner_handle), here.demo_rating, here.demo_reviews);
+    c.rating = rep[0] as float;
+    c.reviews = rep[1] as int;
+    # Reputation nudges the ranking a little; it never overrides a bad route.
+    if c.reviews >= 3 and c.rating >= 4.7 {
+        c.trust_bonus = 3;
+    } elif c.reviews >= 1 and c.rating >= 4.5 {
+        c.trust_bonus = 2;
+    } elif c.reviews >= 1 and c.rating < 3.5 {
+        c.trust_bonus = -6;
+    }
+    rep_text = f"★ {c.rating:.1f} from {c.reviews} review{'s' if c.reviews != 1 else ''}" if c.reviews else "New traveler, no reviews yet";
+    pref_text = "preferences compatible" if c.preference_score >= 90 else "some preference differences";
+    c.notes["Trust Agent"] = rep_text + " · " + pref_text;
+}
+
+impl CostAgent.start {
+    visit [jobj(c.trip_id) for c in self.candidates];
+}
+
+impl CostAgent.inspect {
+    c = _candidate_index(self.candidates).get(jid(here));
+    if c is None {
+        skip;
+    }
+    o = _origin_trip(self.origin_id);
+    pair = _pair(o, here);
+    cost = _cost_benefit(pair[0], pair[1], c.origin_gap_km, c.dest_gap_km);
+    c.cost_score = cost["score"] as int;
+    c.rider_savings = cost["rider_savings"] as float;
+    c.driver_contribution = cost["driver_contribution"] as float;
+    period = "a week" if pair[0].recurring else "per trip";
+    c.notes["Cost Agent"] = f"Saves about ${c.rider_savings:.0f} {period} vs. a private rideshare";
+}
+
+def _cand_overall(c: Candidate) -> int {
+    return c.overall;
+}
+
+impl Coordinator.decide {
+    o = _origin_trip(self.origin_id);
     existing: dict[str, Match] = {};
     for m in _my_matches() {
         existing[m.rider_trip_id + ":" + m.driver_trip_id] = m;
     }
-
-    # A. CandidateDiscovery: active, opposite-role trips from other users.
-    candidates = [
-        t for t in _public_trips()
-        if t.active and t.role == wanted_role and t.mode == o.mode
-        and jid(t) != trip_id and t.owner_root != me
-    ];
-
-    results: list[MatchCardView] = [];
-    for c in candidates {
-        # For peers the searcher sits on the "rider" side of the Match.
-        rider_trip = o if (o.role == "RIDER" or is_peer) else c;
-        driver_trip = c if (o.role == "RIDER" or is_peer) else o;
-        key = jid(rider_trip) + ":" + jid(driver_trip);
-        if key in existing {
-            if existing[key].status != "closed" {
-                results.append(_match_to_card(existing[key]));
-            }
+    weights = _current_weights();
+    for c in self.candidates {
+        base = _score_match(c.route_score, c.detour, c.time_score, c.preference_score, c.cost_score, weights);
+        c.overall = max(1, min(99, base + c.trust_bonus));
+    }
+    ranked = sorted(self.candidates, key=_cand_overall, reverse=True);
+    _record_shown(ranked);
+    for (i, c) in enumerate(ranked) {
+        c.notes["Coordinator"] = f"Ranked #{i + 1} of {len(ranked)} · {c.overall}% overall";
+        other = _load_trip(c.trip_id);
+        if other is None {
             continue;
         }
-
-        # B-E. Route overlap, time, preference and cost scoring
-        route = _route_overlap(rider_trip, driver_trip);
-        time_score = _time_compat(rider_trip, driver_trip);
-        pref_score = _preference_compat(_preference_of(rider_trip), _preference_of(driver_trip));
-        cost = _cost_benefit(rider_trip, driver_trip, route["origin_gap"] as float, route["dest_gap"] as float);
-        # G. MatchScoring
-        overall = _score_match(route["overlap"] as int, route["detour"] as int, time_score, pref_score, cost["score"] as int);
-
-        gap_miles: float = (route["origin_gap"] as float) * 0.621371;
+        pair = _pair(o, other as Trip);
+        rider_trip = pair[0];
+        driver_trip = pair[1];
+        key = jid(rider_trip) + ":" + jid(driver_trip);
+        gap_miles: float = c.origin_gap_km * 0.621371;
+        if key in existing {
+            m = existing[key];
+            if m.status == "closed" {
+                continue;   # declined matches stay out of the results
+            }
+            # Fresh evaluation: refresh the stored scores and notes.
+            m.overall_score = c.overall;
+            m.route_score = c.route_score;
+            m.time_score = c.time_score;
+            m.detour_minutes = c.detour;
+            m.preference_score = c.preference_score;
+            m.cost_benefit_score = c.cost_score;
+            m.estimated_rider_savings = c.rider_savings;
+            m.estimated_driver_contribution = c.driver_contribution;
+            m.pickup_gap_miles = float(f"{gap_miles:.1f}");
+            m.agent_notes = c.notes;
+            self.cards.append(_match_to_card(m));
+            continue;
+        }
         m = Match(
-            overall_score=overall, route_score=route["overlap"] as int, time_score=time_score,
-            detour_minutes=route["detour"] as int, preference_score=pref_score,
-            cost_benefit_score=cost["score"] as int, estimated_rider_savings=cost["rider_savings"] as float,
-            estimated_driver_contribution=cost["driver_contribution"] as float, status="suggested",
+            overall_score=c.overall, route_score=c.route_score, time_score=c.time_score,
+            detour_minutes=c.detour, preference_score=c.preference_score,
+            cost_benefit_score=c.cost_score, estimated_rider_savings=c.rider_savings,
+            estimated_driver_contribution=c.driver_contribution, status="suggested",
             rider_handle=rider_trip.owner_handle, driver_handle=driver_trip.owner_handle,
             rider_trip_id=jid(rider_trip), driver_trip_id=jid(driver_trip),
             rider_root=rider_trip.owner_root, driver_root=driver_trip.owner_root,
-            created_at=_now(), mode=o.mode,
-            pickup_gap_miles=float(f"{gap_miles:.1f}")
+            created_at=_now(), mode=o.mode, pickup_gap_miles=float(f"{gap_miles:.1f}"),
+            agent_notes=c.notes
         );
         root.shared ++> m;
         _share_with(m, c.owner_root, WritePerm);
-
         rec = _impact_record();
         rec.trips_matched += 1;
         rec.estimated_savings += m.estimated_rider_savings;
         rec.estimated_shared_miles += 38.5;
-
-        results.append(_match_to_card(m));
+        self.cards.append(_match_to_card(m));
     }
+}
 
-    return _sort_cards(results);
+impl run_agents(trip_id: str) -> AgentRunView {
+    return _run_agents(trip_id, True);
+}
+
+impl switch_journey(trip_id: str, mode: str) -> str {
+    t = _load_trip(trip_id);
+    if t is None or (t as Trip).owner_root != _my_root_id() or mode not in ["ride", "cab"] {
+        return "";
+    }
+    o = t as Trip;
+    arrive_by = o.time_preference == "arrive_by";
+    return create_journey(
+        mode, "RIDER", o.origin_name, o.destination_name, o.travel_date,
+        o.time_preference, o.arrival_deadline if arrive_by else o.departure_time,
+        o.recurring, o.flexible_minutes, 0, o.people, 0, o.pickup_distance, "", False,
+        o.age_pref, o.gender_pref, o.notes, o.origin_lat, o.origin_lng,
+        o.destination_lat, o.destination_lng, o.round_trip, "", "",
+        o.age_min, o.age_max, o.gender_prefs, False
+    );
+}
+
+impl post_journey(trip_id: str) -> int {
+    t = _load_trip(trip_id);
+    if t is None or (t as Trip).owner_root != _my_root_id() {
+        return 0;
+    }
+    p = t as Trip;
+    p.posted = True;
+    p.active = True;
+    if p.matchmaker_done {
+        return 0;   # already announced once; don't notify people twice
+    }
+    p.matchmaker_done = True;
+    return _notify_new_matches(p, _run_agents(trip_id, False).cards);
+}
+
+# Visible to other people's searches: posted (or demo) and not in the past.
+def _is_listed(t: Trip) -> bool {
+    return t.active and (t.posted or t.is_demo) and not _is_expired(t);
+}
+
+def _is_expired(t: Trip) -> bool {
+    if t.recurring or not t.travel_date {
+        return False;
+    }
+    last = t.return_date if t.mode == "rental" and t.return_date else t.travel_date;
+    return last < datetime.date.today().isoformat();
+}
+
+# with_relays: also look for 2-ride routes (slower: needs road routes + places).
+def _run_agents(trip_id: str, with_relays: bool) -> AgentRunView {
+    origin = _load_trip(trip_id);
+    me = _my_root_id();
+    if origin is None or (origin as Trip).owner_root != me {
+        return AgentRunView();   # you can only run matching for your own trip
+    }
+    shared = root.shared;
+
+    scout = RouteScout(origin_id=trip_id, my_root=me, blocked=list(_blocked_keys()));
+    shared spawn scout;
+    found = scout.candidates;
+    schedule = ScheduleAgent(origin_id=trip_id, candidates=found);
+    shared spawn schedule;
+    trust = TrustAgent(origin_id=trip_id, candidates=found);
+    shared spawn trust;
+    cost = CostAgent(origin_id=trip_id, candidates=found);
+    shared spawn cost;
+    coordinator = Coordinator(origin_id=trip_id, my_root=me, candidates=found);
+    shared spawn coordinator;
+
+    cards = _sort_cards(coordinator.cards);
+    k = len(found);
+    in_window = len([c for c in found if c.time_gap_min <= 20]);
+    rated = len([c for c in found if c.reviews > 0]);
+    best_saving: float = max([c.rider_savings for c in found]) if k else 0.0;
+    steps = [
+        AgentStepView(agent="Route Scout", role="Walks the journey graph for shared corridors",
+            looked_at=scout.scanned, kept=k,
+            summary=f"Walked {scout.scanned} journeys on the graph; {k} share your corridor"),
+        AgentStepView(agent="Schedule Agent", role="Lines up departure times and detours",
+            looked_at=k, kept=in_window,
+            summary=f"Checked {k} schedules; {in_window} leave within 20 minutes of you"),
+        AgentStepView(agent="Trust Agent", role="Weighs reviews and ride preferences",
+            looked_at=k, kept=rated,
+            summary=f"{rated} rated travelers, {k - rated} new to Along; preferences checked"),
+        AgentStepView(agent="Cost Agent", role="Estimates what each match saves",
+            looked_at=k, kept=k,
+            summary=f"Best split saves about ${best_saving:.0f}" if k else "No costs to compare yet"),
+        AgentStepView(agent="Coordinator", role="Combines every agent's score and ranks",
+            looked_at=k, kept=len(cards),
+            summary=(f"Ranked {len(cards)} matches; the best is {cards[0].overall_score}%") if len(cards) else "No matches to rank yet"),
+    ];
+    relays: list[RelayView] = [];
+    o = origin as Trip;
+    if with_relays and o.mode == "ride" and o.role == "RIDER" {
+        # Two rides are a fallback: only look when no direct ride is good,
+        # and never build one from a driver who already goes your way.
+        best_direct = cards[0].overall_score if len(cards) > 0 else 0;
+        summary = "A direct ride works — no need for two";
+        if best_direct < RELAY_ONLY_BELOW {
+            direct_ids = set([c.trip_id for c in found]);
+            relays = [r for r in _find_relays(o, direct_ids) if r.score > best_direct];
+            summary = (f"Found {len(relays)} 2-ride route{'s' if len(relays) != 1 else ''}; handoff picked by " + (relays[0].handoff.source if relays[0].handoff is not None else "rules"))
+                if len(relays) else "No 2-ride route beats the direct options";
+        }
+        steps = steps + [AgentStepView(
+            agent="Relay Agent", role="Pairs two drivers with a safe handoff when no one goes the whole way",
+            looked_at=k, kept=len(relays), summary=summary
+        )];
+    }
+    return AgentRunView(cards=cards, steps=steps, relays=relays);
+}
+
+impl run_matching(trip_id: str) -> list[MatchCardView] {
+    return _run_agents(trip_id, False).cards;
 }
 
 impl get_match_results() -> list[MatchCardView] {
@@ -953,7 +1470,11 @@ def _convo_view(m: Match, convo: Conversation) -> ConversationView {
         other_approved=convo.driver_approved if role == "RIDER" else convo.rider_approved,
         messages=views, other_display_name=identity[0], other_verified=identity[1],
         other_phone=_other_phone(m, convo), match_status=m.status, mode=m.mode,
-        i_rated=m.rider_rated if role == "RIDER" else m.driver_rated
+        i_rated=m.rider_rated if role == "RIDER" else m.driver_rated,
+        relay_plan_id=m.relay_plan_id if role == "RIDER" else "",
+        relay_leg=m.relay_leg, relay_status=m.relay_status,
+        relay_stop=m.relay_stop, relay_time=m.relay_time,
+        i_am_driver_of_leg=role == "DRIVER" and m.relay_leg != ""
     );
 }
 
@@ -983,6 +1504,7 @@ impl create_anonymous_connection(match_id: str) -> ConversationView | None {
     }
     convo = Conversation(status="anonymous", identity_revealed=False, created_at=_now());
     mt +>:Opens:+> convo;
+    _record_chosen(mt);   # someone chose to talk to this match: learn from it
     _share_with(convo, _other_root(mt), WritePerm);
     if _is_demo_match(mt) {
         _seed_demo_chat(convo, mt);
@@ -1005,6 +1527,10 @@ impl send_message(match_id: str, body: str) -> ConversationView | None {
     if clean {
         handle = mt.rider_handle if _my_role(mt) == "RIDER" else mt.driver_handle;
         _add_message(convo as Conversation, handle, _my_root_id(), clean, _now());
+        _notify(
+            _other_root(mt), "message", "New message from " + handle,
+            clean[:90] + ("…" if len(clean) > 90 else ""), jid(mt), "", True
+        );
     }
     return _convo_view(mt, convo as Conversation);
 }
@@ -1130,21 +1656,29 @@ impl complete_match(match_id: str) -> bool {
     return True;
 }
 
-impl rate_match(match_id: str, stars: int, comment: str) -> bool {
+impl rate_match(match_id: str, stars: int, comment: str, tags: list[str] = []) -> bool {
     m = _find_match(match_id);
     if m is None or stars < 1 or stars > 5 {
         return False;
     }
     mt = m as Match;
     role = _my_role(mt);
-    already = mt.rider_rated if role == "RIDER" else mt.driver_rated;
-    if already {
-        return False;
+    clean_tags = [t for t in tags if t in REVIEW_TAGS][:6];
+    mine = _my_rating(mt);
+    if mine is not None {
+        # Editing is always allowed; the review keeps its original month.
+        r = mine as Rating;
+        r.stars = stars;
+        r.comment = comment.strip()[:1000];
+        r.tags = clean_tags;
+        return True;
     }
     other_handle = mt.driver_handle if role == "RIDER" else mt.rider_handle;
     rating = Rating(
         ratee_key=_ratee_key(_other_root(mt), other_handle), stars=stars,
-        comment=comment.strip()[:1000], created_at=_now()
+        comment=comment.strip()[:1000], created_at=_now(), tags=clean_tags,
+        rated_on=datetime.datetime.now().strftime("%b %Y"), mode=mt.mode,
+        match_id=jid(mt), rater_root=_my_root_id()
     );
     root.shared ++> rating;
     grant(rating, level=ReadPerm);
@@ -1154,4 +1688,1651 @@ impl rate_match(match_id: str, stars: int, comment: str) -> bool {
         mt.driver_rated = True;
     }
     return True;
+}
+
+def _owned_by_me(n: any) -> bool {
+    owner: any = n.__jac__.root;  # jac:ignore[E1030]
+    return owner is not None and owner.hex == _my_root_id();
+}
+
+# My rating for this match. Older ratings weren't linked to their match, so
+# the first unlinked one I wrote about this person gets linked now.
+def _my_rating(mt: Match) -> Rating | None {
+    me = _my_root_id();
+    mid = jid(mt);
+    ratings = [root.shared-->][?:Rating];
+    for r in ratings {
+        if r.match_id == mid and r.rater_root == me {
+            return r;
+        }
+    }
+    role = _my_role(mt);
+    already = mt.rider_rated if role == "RIDER" else mt.driver_rated;
+    if not already {
+        return None;
+    }
+    other_key = _ratee_key(_other_root(mt), mt.driver_handle if role == "RIDER" else mt.rider_handle);
+    for r in ratings {
+        if not r.match_id and r.ratee_key == other_key and _owned_by_me(r) {
+            r.match_id = mid;
+            r.rater_root = me;
+            return r;
+        }
+    }
+    return None;
+}
+
+def _given_view(mt: Match, r: Rating) -> GivenRatingView {
+    role = _my_role(mt);
+    other_handle = mt.driver_handle if role == "RIDER" else mt.rider_handle;
+    other = _load_trip(mt.driver_trip_id if role == "RIDER" else mt.rider_trip_id);
+    route = "";
+    if other is not None {
+        ot = other as Trip;
+        route = ot.origin_name.split(",")[0] + " → " + ot.destination_name.split(",")[0];
+    }
+    return GivenRatingView(
+        match_id=jid(mt), handle=other_handle, stars=r.stars, comment=r.comment, tags=r.tags,
+        mode=mt.mode, route=route, rated_on=r.rated_on,
+        blocked=_ratee_key(_other_root(mt), other_handle) in _blocked_keys()
+    );
+}
+
+impl get_my_ratings() -> list[GivenRatingView] {
+    out: list[GivenRatingView] = [];
+    for mt in _my_matches() {
+        role = _my_role(mt);
+        if not (mt.rider_rated if role == "RIDER" else mt.driver_rated) {
+            continue;
+        }
+        r = _my_rating(mt);
+        if r is not None {
+            out.append(_given_view(mt, r as Rating));
+        }
+    }
+    return list(reversed(out));
+}
+
+impl get_my_rating(match_id: str) -> GivenRatingView | None {
+    m = _find_match(match_id);
+    if m is None {
+        return None;
+    }
+    r = _my_rating(m as Match);
+    return _given_view(m as Match, r as Rating) if r is not None else None;
+}
+
+# ---------------------------------------------------------------------------
+# Traveler profiles + reviews
+# ---------------------------------------------------------------------------
+
+glob REVIEW_TAGS: list[str] = [
+    "On time", "Friendly", "Safe driving", "Clean car", "Great communication",
+    "Flexible", "Respectful", "Easy pickup"
+];
+
+# Demo travelers' seeded reputation comes with a few sample reviews to show.
+glob DEMO_REVIEWS: dict[str, list[dict]] = {
+    "MapleDriver": [
+        {"stars": 5, "comment": "Always right on time at the Grand Blanc lot.", "tags": ["On time", "Easy pickup"], "rated_on": "Aug 2026", "mode": "ride"},
+        {"stars": 5, "comment": "Calm, careful driver — my favorite commute.", "tags": ["Safe driving", "Friendly"], "rated_on": "Jul 2026", "mode": "ride"},
+        {"stars": 4, "comment": "", "tags": ["Clean car"], "rated_on": "Jul 2026", "mode": "ride"},
+    ],
+    "NorthStar22": [
+        {"stars": 5, "comment": "Quiet ride, exactly what I wanted before work.", "tags": ["Respectful", "On time"], "rated_on": "Aug 2026", "mode": "ride"},
+        {"stars": 4, "comment": "Great driver, a few minutes late once.", "tags": ["Safe driving"], "rated_on": "Jun 2026", "mode": "ride"},
+    ],
+    "GardenRider": [
+        {"stars": 5, "comment": "Ready at the pickup spot every morning.", "tags": ["On time", "Great communication"], "rated_on": "Aug 2026", "mode": "ride"},
+    ],
+    "CampusBound": [
+        {"stars": 5, "comment": "", "tags": ["Friendly", "Respectful"], "rated_on": "Aug 2026", "mode": "ride"},
+    ],
+    "LakeLooper": [{"stars": 4, "comment": "Nice company on the drive.", "tags": ["Friendly"], "rated_on": "Jul 2026", "mode": "ride"}],
+    "YpsiCommuter": [{"stars": 5, "comment": "Super easy to coordinate with.", "tags": ["Great communication"], "rated_on": "Aug 2026", "mode": "ride"}],
+    "MovingNorth": [{"stars": 5, "comment": "Helped load the truck, split was fair.", "tags": ["Flexible", "Friendly"], "rated_on": "Aug 2026", "mode": "rental"}],
+    "WeekendWay": [
+        {"stars": 5, "comment": "Returned the SUV spotless and on time.", "tags": ["On time", "Respectful"], "rated_on": "Aug 2026", "mode": "rental"},
+        {"stars": 5, "comment": "", "tags": ["Great communication"], "rated_on": "Jun 2026", "mode": "rental"},
+    ],
+    "WindowSeat": [
+        {"stars": 5, "comment": "Found each other at baggage claim in minutes.", "tags": ["Easy pickup", "Great communication"], "rated_on": "Aug 2026", "mode": "cab"},
+        {"stars": 5, "comment": "", "tags": ["Friendly"], "rated_on": "Jul 2026", "mode": "cab"},
+    ],
+    "CityLight": [{"stars": 4, "comment": "Good cab share, small wait at the curb.", "tags": ["Flexible"], "rated_on": "Jul 2026", "mode": "cab"}],
+};
+
+def _tag_count(pair: list) -> int {
+    return pair[1] as int;
+}
+
+def _mode_label(mode: str, role: str) -> str {
+    if mode == "rental" {
+        return "Share a rental";
+    }
+    if mode == "cab" {
+        return "Share a cab";
+    }
+    return "Offers rides" if role == "DRIVER" else "Needs rides";
+}
+
+impl get_traveler_profile(match_id: str) -> TravelerProfileView | None {
+    m = _find_match(match_id);
+    if m is None {
+        return None;
+    }
+    mt = m as Match;
+    role = _my_role(mt);
+    other_root = _other_root(mt);
+    handle = mt.driver_handle if role == "RIDER" else mt.rider_handle;
+    other_trip_id = mt.driver_trip_id if role == "RIDER" else mt.rider_trip_id;
+    loaded = _load_trip(other_trip_id);
+    is_demo = other_root == "demo";
+    key = _ratee_key(other_root, handle);
+
+    # Reviews: real anonymous ratings, plus seeded samples for demo travelers.
+    reviews: list[ReviewView] = [];
+    total = 0.0;
+    count = 0;
+    for r in [root.shared-->][?:Rating] {
+        if r.ratee_key == key {
+            reviews.append(ReviewView(stars=r.stars, comment=r.comment, tags=r.tags, rated_on=r.rated_on, mode=r.mode));
+            total += r.stars;
+            count += 1;
+        }
+    }
+    if is_demo and loaded is not None {
+        t = loaded as Trip;
+        for d in DEMO_REVIEWS.get(t.owner_handle, []) {
+            reviews.append(ReviewView(
+                stars=d["stars"] as int, comment=d["comment"] as str, tags=d["tags"] as list[str],
+                rated_on=d["rated_on"] as str, mode=d["mode"] as str
+            ));
+        }
+        total += t.demo_rating * t.demo_reviews;
+        count += t.demo_reviews;
+    }
+    tag_counts: dict[str, int] = {};
+    for rv in reviews {
+        for tg in rv.tags {
+            tag_counts[tg] = tag_counts.get(tg, 0) + 1;
+        }
+    }
+    top: list[str] = [p[0] as str for p in sorted([[k, v] for (k, v) in tag_counts.items()], key=_tag_count, reverse=True)][:4];
+
+    # Their public journeys (trips are visible to every logged-in user anyway).
+    theirs = [t for t in _public_trips() if t.owner_root == other_root and t.active and (not is_demo or t.owner_handle == handle)];
+    kinds = sorted(list(set([_mode_label(t.mode, t.role) for t in theirs])));
+
+    convo = _find_conversation(mt);
+    revealed = convo is not None and (convo as Conversation).identity_revealed;
+    view = TravelerProfileView(
+        match_id=jid(mt), handle=handle, revealed=revealed,
+        rating=float(f"{(total / count) if count else 0.0:.1f}"), review_count=count,
+        is_new=count == 0, top_tags=top, reviews=reviews[::-1][:12] if not is_demo else reviews[:12],
+        journeys_posted=len(theirs), journey_types=kinds, is_demo=is_demo,
+        email_verified=_has_badge(other_root),
+        can_review=mt.status == "completed",
+        already_reviewed=mt.rider_rated if role == "RIDER" else mt.driver_rated
+    );
+    if revealed {
+        c = convo as Conversation;
+        name_verified = _other_identity(mt, c);
+        view.display_name = name_verified[0] as str;
+        view.verified = name_verified[1] as bool;
+        if not is_demo {
+            other_profile_id = c.driver_profile_id if role == "RIDER" else c.rider_profile_id;
+            try {
+                prof = jobj(other_profile_id);
+                if isinstance(prof, User) {
+                    view.home_region = (prof as User).home_region;
+                    view.member_since = (prof as User).member_since;
+                }
+            } except Exception {
+                print("[profile] other traveler's profile not shared yet");
+            }
+        }
+    }
+    return view;
+}
+
+# ---------------------------------------------------------------------------
+# Matchmaker + notifications
+# ---------------------------------------------------------------------------
+
+glob NOTIFY_MIN_SCORE: int = 60,     # don't ping people about weak matches
+     NOTIFY_MAX_PER_POST: int = 8;
+
+def _iso_now() -> str {
+    return datetime.datetime.now(datetime.timezone.utc).isoformat();
+}
+
+# Create (or refresh) a notification for another user. `coalesce` folds a
+# burst of chat messages into one unread notification per conversation.
+def _notify(recipient: str, kind: str, title: str, body: str, match_id: str, trip_id: str, coalesce: bool = False) -> None {
+    if not recipient or recipient == "demo" or recipient == _my_root_id() or recipient in _blocked_keys() {
+        return;
+    }
+    if coalesce {
+        for n in [root.shared-->][?:Notification] {
+            if n.recipient_root == recipient and n.kind == kind and n.match_id == match_id and not n.read {
+                n.title = title;
+                n.body = body;
+                n.created_at = _iso_now();
+                return;
+            }
+        }
+    }
+    n = Notification(
+        recipient_root=recipient, kind=kind, title=title, body=body,
+        match_id=match_id, trip_id=trip_id, created_at=_iso_now()
+    );
+    root.shared ++> n;
+    _share_with(n, recipient, WritePerm);   # the recipient can mark it read
+}
+
+impl Matchmaker.watch {
+    posted = _load_trip(self.trip_id);
+    if posted is None {
+        skip;
+    }
+    p = posted as Trip;
+    self.notified = _notify_new_matches(p, _run_agents(self.trip_id, False).cards);
+}
+
+# Tell every existing traveler this new journey fits (score >= threshold).
+def _notify_new_matches(p: Trip, cards: list[MatchCardView]) -> int {
+    notified = 0;
+    route = p.origin_name.split(",")[0] + " → " + p.destination_name.split(",")[0];
+    for card in cards[:NOTIFY_MAX_PER_POST] {
+        other = card.other_trip;
+        if other is None or card.overall_score < NOTIFY_MIN_SCORE {
+            continue;
+        }
+        other_trip = _load_trip(other.id);
+        if other_trip is None {
+            continue;
+        }
+        theirs = other_trip as Trip;
+        their_route = theirs.origin_name.split(",")[0] + " → " + theirs.destination_name.split(",")[0];
+        who = "driver" if p.role == "DRIVER" else ("rider" if p.role == "RIDER" else "traveler");
+        _notify(
+            theirs.owner_root, "match",
+            f"New {card.overall_score}% match for your {their_route} journey",
+            f"A {who} just posted {route} ({card.fit_label.lower()}). Along's agents think you'd travel well together.",
+            card.id, jid(theirs)
+        );
+        notified += 1;
+    }
+    return notified;
+}
+
+def _notification_time(n: NotificationView) -> str {
+    return n.created_at;
+}
+
+impl get_my_notifications() -> list[NotificationView] {
+    me = _my_root_id();
+    mine = [
+        NotificationView(
+            id=jid(n), kind=n.kind, title=n.title, body=n.body, match_id=n.match_id,
+            trip_id=n.trip_id, created_at=n.created_at, read=n.read
+        )
+        for n in [root.shared-->][?:Notification] if n.recipient_root == me
+    ];
+    return sorted(mine, key=_notification_time, reverse=True)[:30];
+}
+
+# Marks the given notifications read (all of mine when ids is empty).
+impl mark_notifications_read(ids: list[str]) -> int {
+    me = _my_root_id();
+    changed = 0;
+    for n in [root.shared-->][?:Notification] {
+        if n.recipient_root == me and not n.read and (len(ids) == 0 or jid(n) in ids) {
+            n.read = True;
+            changed += 1;
+        }
+    }
+    return changed;
+}
+
+# ---------------------------------------------------------------------------
+# Trip assistant — plain English -> journey draft
+#
+# Gemini is called directly over REST (no byllm/litellm), which keeps the
+# server small enough for Render's free plan. With no key, or if Gemini
+# fails, a rule-based reader handles common phrasings, so it never breaks.
+# ---------------------------------------------------------------------------
+
+import re;
+
+glob VEHICLE_CHOICES: list[str] = ["Compact car", "Sedan", "SUV", "Minivan", "Pickup truck", "Cargo van", "Box truck"],
+     WEEKDAYS: list[str] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+# Fast, reliable model first; a second one if it's busy. (The "-latest"
+# aliases are often overloaded and time out.) GEMINI_MODEL overrides the first.
+def _gemini_models() -> list[str] {
+    return [os.environ.get("GEMINI_MODEL", "").strip() or "gemini-3.1-flash-lite", "gemini-flash-latest"];
+}
+
+def _gemini_key() -> str {
+    return os.environ.get("GEMINI_API_KEY", "").strip();
+}
+
+def _draft_schema() -> dict {
+    return {
+        "type": "OBJECT",
+        "properties": {
+            "journey_type": {"type": "STRING", "enum": ["ride", "buddy", "rental", "cab"],
+                "description": "ride = needs a ride from someone who is driving; buddy = the writer is DRIVING and offers seats (e.g. 'driving X to Y', '2 seats free'); rental = wants to share a rental car or truck (also moving house); cab = wants to split a cab/taxi/Uber/Lyft"},
+            "pickup": {"type": "STRING", "description": "Start place as the user wrote it, e.g. 'Grand Blanc, MI' or 'Detroit Metro Airport'. Empty if not given."},
+            "dropoff": {"type": "STRING", "description": "Destination place. Empty if not given."},
+            "time": {"type": "STRING", "description": "24h HH:MM, or empty if no time was given"},
+            "time_preference": {"type": "STRING", "enum": ["arrive_by", "depart_at"],
+                "description": "arrive_by for 'by 9', 'need to be there at'; depart_at for 'leaving at', 'around 7'"},
+            "recurring": {"type": "BOOLEAN", "description": "true for commutes: every weekday, daily, Mon-Fri, every morning"},
+            "date": {"type": "STRING", "description": "YYYY-MM-DD for a one-time trip (resolve 'tomorrow', 'Saturday' from today's date), else empty"},
+            "round_trip": {"type": "BOOLEAN", "description": "true if they also come back (and back, return, round trip, back at 5)"},
+            "seats": {"type": "INTEGER", "description": "seats offered when journey_type is buddy, else 0"},
+            "people": {"type": "INTEGER", "description": "people travelling (default 1)"},
+            # Gemini rejects "" in an enum, so "none" stands for no vehicle.
+            "vehicle": {"type": "STRING", "enum": ["none", "Compact car", "Sedan", "SUV", "Minivan", "Pickup truck", "Cargo van", "Box truck"]},
+            "moving_help": {"type": "BOOLEAN", "description": "true if they mention moving, boxes, furniture"},
+            "needs_driver": {"type": "BOOLEAN", "description": "true if they can't or don't drive and need someone else to drive the rental"},
+            "gender_prefs": {"type": "ARRAY", "items": {"type": "STRING", "enum": ["woman", "man", "non-binary"]},
+                "description": "Who they want to travel with, e.g. 'women only' -> ['woman']; empty if not said"},
+            "age_min": {"type": "INTEGER", "description": "Youngest travel partner they want (e.g. 'over 25' -> 26), 0 if not said"},
+            "age_max": {"type": "INTEGER", "description": "Oldest travel partner they want (e.g. 'under 30' -> 29), 0 if not said"},
+            "summary": {"type": "STRING", "description": "One short friendly sentence restating the plan, including any preferences"}
+        },
+        "required": ["journey_type", "pickup", "dropoff", "time", "time_preference", "recurring", "date",
+                     "round_trip", "seats", "people", "vehicle", "moving_help", "needs_driver", "gender_prefs",
+                     "age_min", "age_max", "summary"]
+    };
+}
+
+def _gemini_draft(text: str) -> dict | None {
+    key = _gemini_key();
+    if not key {
+        return None;
+    }
+    today = datetime.date.today();
+    instruction = (
+        "You turn one sentence from a traveler in Michigan into a structured journey for the Along "
+        "ride-sharing app. Today is " + today.strftime("%A, %Y-%m-%d") + ". Only use what the sentence "
+        "says; leave fields empty/false/0 when unsure. Places are in Michigan unless stated. "
+        "Never invent a pickup or dropoff. It is now " + datetime.datetime.now().strftime("%H:%M") + "; if a named "
+        "weekday is today but its time has already passed, use that weekday next week."
+    );
+    body = {
+        "systemInstruction": {"parts": [{"text": instruction}]},
+        "contents": [{"role": "user", "parts": [{"text": text[:500]}]}],
+        "generationConfig": {
+            "temperature": 0, "responseMimeType": "application/json", "responseSchema": _draft_schema()
+        }
+    };
+    # Try the configured model, then a second one if it's busy or rate-limited.
+    models = _gemini_models();
+    for model in models {
+        url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
+        result = _http_json(url, body, {"Content-Type": "application/json", "x-goog-api-key": key}, 6);
+        if result is None or not result.get("candidates") {
+            continue;
+        }
+        try {
+            raw: str = result["candidates"][0]["content"]["parts"][0]["text"];
+            return json.loads(raw);
+        } except Exception as e {
+            print(f"[assistant] could not read Gemini reply: {e}");
+        }
+    }
+    return None;
+}
+
+def _to_hhmm(hour: int, minute: int, meridiem: str) -> str {
+    h = hour;
+    if meridiem.startswith("p") and h < 12 {
+        h += 12;
+    }
+    if meridiem.startswith("a") and h == 12 {
+        h = 0;
+    }
+    if not meridiem and h < 6 {
+        h += 12;    # "by 5" with no am/pm almost always means 5 PM
+    }
+    return f"{h % 24:02d}:{minute:02d}";
+}
+
+# Strip filler the regex can't tell apart from a place: leading verbs
+# ("driving Lansing") and trailing day words ("Detroit Friday").
+glob PLACE_ALIASES: dict[str, str] = {
+    "ypsi": "Ypsilanti, MI", "a2": "Ann Arbor, MI", "dtw": "Detroit Metro Airport",
+    "the airport": "Detroit Metro Airport", "metro airport": "Detroit Metro Airport",
+    "downtown": "Downtown Detroit", "gr": "Grand Rapids, MI", "msu": "Michigan State University",
+    "um": "University of Michigan", "umich": "University of Michigan"
+};
+
+def _clean_place(raw: str) -> str {
+    place = raw.strip(" .,");
+    place = re.sub(r"^(?:i'?m |i am |i )?(?:driving|going|heading|leaving|travell?ing|commuting|flying)(?: from)?\s+", "", place, flags=re.I);
+    place = re.sub(r"\s+(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|tonight|this \w+|next \w+)\b.*$", "", place, flags=re.I);
+    place = re.sub(r"\s+(?:need|needs|with|for|i|we|and|but|so|please)\b.*$", "", place, flags=re.I);
+    place = place.strip(" .,");
+    return PLACE_ALIASES.get(place.lower(), place);
+}
+
+# Handles the common phrasings when Gemini isn't available.
+def _rules_draft(text: str) -> dict {
+    t = text.lower();
+    kind = "ride";
+    if re.search(r"\b(rent|rental|truck|moving|u-?haul)\b", t) {
+        kind = "rental";
+    } elif re.search(r"\b(cab|taxi|uber|lyft|split a ride|split the fare)\b", t) {
+        kind = "cab";
+    } elif re.search(r"^driving\b|\b(i'?m driving|i drive|i am driving|offering|(\d+|two|three|four) (empty |free |open )?seats?|seats? (free|open|available)|giving a ride|can take)\b", t) {
+        kind = "buddy";
+    }
+    pickup = "";
+    dropoff = "";
+    m = re.search(r"from\s+(.+?)\s+to\s+(.+?)(?=\s+(?:by|at|around|every|on|tomorrow|today|tonight|this|next|and|leaving|arriving|monday|tuesday|wednesday|thursday|friday|saturday|sunday|need|with|for)\b|[.,!]|$)", text, re.I);
+    if not m {
+        m = re.search(r"^(?:i\s+)?(?:need (?:a ride|a cab|a lift|to get)?\s*|i'?m (?:going|heading|driving)\s+|going\s+|heading\s+|ride\s+|cab\s+|uber\s+|lyft\s+|taxi\s+)?(?:from\s+)?([a-z .'-]+?)\s+to\s+([a-z .'-]+?)(?=\s+(?:by|at|around|every|on|tomorrow|today|tonight|and|monday|tuesday|wednesday|thursday|friday|saturday|sunday|need|with|for|\d)\b|[.,!]|$)", text, re.I);
+    }
+    if m {
+        pickup = _clean_place(m.group(1));
+        dropoff = _clean_place(m.group(2));
+    }
+    time_pref = "depart_at";
+    tm = re.search(r"\b(by|before|arrive(?: by)?|at|around|leaving(?: at)?|leave(?: at)?)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?", t);
+    hhmm = "";
+    if tm {
+        time_pref = "arrive_by" if tm.group(1).startswith(("by", "before", "arrive")) else "depart_at";
+        hhmm = _to_hhmm(int(tm.group(2)), int(tm.group(3) or 0), (tm.group(4) or "").replace(".", ""));
+    } else {
+        bare = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)", t);
+        if bare {
+            hhmm = _to_hhmm(int(bare.group(1)), int(bare.group(2) or 0), bare.group(3).replace(".", ""));
+        }
+    }
+    recurring = bool(re.search(r"\b(every (week)?day|weekdays|daily|mon(day)?\s*-\s*fri(day)?|each morning|commute)\b", t));
+    date = "";
+    today = datetime.date.today();
+    if "tomorrow" in t {
+        date = (today + datetime.timedelta(days=1)).isoformat();
+    } elif "today" in t or "tonight" in t {
+        date = today.isoformat();
+    } else {
+        for (i, day) in enumerate(WEEKDAYS) {
+            if day in t and not recurring {
+                ahead = (i - today.weekday()) % 7 or 7;
+                date = (today + datetime.timedelta(days=ahead)).isoformat();
+                break;
+            }
+        }
+    }
+    seats = 0;
+    sm = re.search(r"(\d+)\s+(?:empty\s+)?seats?", t);
+    if sm and kind == "buddy" {
+        seats = int(sm.group(1));
+    }
+    pm = re.search(r"(\d+)\s+(?:of us|people|persons|travelers)", t);
+    people = int(pm.group(1)) if pm else 1;
+    vehicle = "";
+    for v in VEHICLE_CHOICES {
+        if v.lower() in t {
+            vehicle = v;
+        }
+    }
+    genders: list[str] = [];
+    if re.search(r"\b(women|woman|female|girls?|ladies)[- ]only\b|\bonly (women|females|ladies)\b", t) {
+        genders = ["woman"];
+    } elif re.search(r"\b(men|male|guys)[- ]only\b|\bonly (men|males|guys)\b", t) {
+        genders = ["man"];
+    }
+    age_lo = 0;
+    age_hi = 0;
+    am = re.search(r"\bages?\s+(\d{1,2})\s*(?:-|to|–)\s*(\d{1,3})", t);
+    if am {
+        age_lo = int(am.group(1));
+        age_hi = int(am.group(2));
+    } else {
+        um = re.search(r"\b(?:under|below|younger than)\s+(\d{1,2})", t);
+        om = re.search(r"\b(?:over|above|older than)\s+(\d{1,2})", t);
+        age_hi = int(um.group(1)) - 1 if um else 0;
+        age_lo = int(om.group(1)) + 1 if om else 0;
+    }
+    if not vehicle {
+        if re.search(r"\b(moving truck|box truck|u-?haul)\b", t) {
+            vehicle = "Box truck";
+        } elif re.search(r"\bpick-?up\b|\btruck\b", t) {
+            vehicle = "Pickup truck";
+        } elif re.search(r"\bvan\b", t) {
+            vehicle = "Cargo van";
+        }
+    }
+    return {
+        "journey_type": kind, "pickup": pickup, "dropoff": dropoff, "time": hhmm,
+        "needs_driver": bool(re.search(r"\b(don'?t|do not|can'?t|cannot) drive\b|\bno (driver'?s )?licen[cs]e\b|\bneed (a|someone to) drive", t)),
+        "gender_prefs": genders, "age_min": age_lo, "age_max": age_hi,
+        "time_preference": time_pref, "recurring": recurring, "date": date,
+        "round_trip": bool(re.search(r"\b(round ?trip|and back|come back|coming back|return|back at)\b", t)),
+        "seats": seats, "people": people, "vehicle": vehicle,
+        "moving_help": bool(re.search(r"\b(moving|boxes|furniture|couch)\b", t)), "summary": ""
+    };
+}
+
+impl plan_trip(text: str) -> TripDraftView {
+    clean = text.strip();
+    if len(clean) < 4 {
+        return TripDraftView(ok=False, summary="Tell me where you're going, e.g. 'Flint to Ann Arbor by 9 every weekday'.");
+    }
+    rules = _rules_draft(clean);
+    data = _gemini_draft(clean);
+    source = "gemini";
+    if data is None {
+        data = rules;
+        source = "rules";
+    }
+    d = data as dict;
+    # Clear keywords beat a guess: "driving… 2 seats", "split a cab", "moving truck".
+    if rules["journey_type"] != "ride" and d.get("journey_type") in ["ride", None, ""] {
+        d["journey_type"] = rules["journey_type"];
+    }
+    for k in ["seats", "vehicle", "needs_driver", "age_min", "age_max"] {
+        if not d.get(k) or d.get(k) == "none" {
+            d[k] = rules[k];
+        }
+    }
+    if not d.get("gender_prefs") {
+        d["gender_prefs"] = rules["gender_prefs"];
+    }
+    if int(d.get("people") or 1) <= 1 {
+        d["people"] = rules["people"];
+    }
+    kind = str(d.get("journey_type") or "ride");
+    if kind not in ["ride", "buddy", "rental", "cab"] {
+        kind = "ride";
+    }
+    draft = TripDraftView(
+        ok=True, source=source, kind=kind,
+        origin_name=_clean_place(str(d.get("pickup") or ""))[:80],
+        destination_name=_clean_place(str(d.get("dropoff") or ""))[:80],
+        time=str(d.get("time") or "")[:5],
+        time_preference="arrive_by" if d.get("time_preference") == "arrive_by" else "depart_at",
+        recurring=bool(d.get("recurring")), travel_date=str(d.get("date") or "")[:10],
+        round_trip=bool(d.get("round_trip")),
+        seats=max(0, min(int(d.get("seats") or 0), 8)),
+        people=max(1, min(int(d.get("people") or 1), 8)),
+        vehicle=str(d.get("vehicle") or "") if str(d.get("vehicle") or "") in VEHICLE_CHOICES else "",
+        moving_help=bool(d.get("moving_help")),
+        needs_driver=bool(d.get("needs_driver")) and kind == "rental",
+        gender_prefs=[g for g in (d.get("gender_prefs") or []) if g in ["woman", "man", "non-binary"]],
+        age_min=max(1, min(int(d.get("age_min") or 1), 100)),
+        age_max=max(1, min(int(d.get("age_max") or 100), 100)),
+        summary=str(d.get("summary") or "")[:200]
+    );
+    if draft.age_max < draft.age_min {
+        draft.age_max = 100;
+    }
+    if draft.kind == "buddy" and draft.seats == 0 {
+        draft.seats = 3;
+    }
+    # Pin both places on the map (Michigan-biased), so the form arrives ready.
+    if draft.origin_name {
+        found = _geocode(draft.origin_name);
+        if found is not None {
+            draft.origin_lat = found[0];
+            draft.origin_lng = found[1];
+        }
+    }
+    if draft.destination_name {
+        found = _geocode(draft.destination_name);
+        if found is not None {
+            draft.destination_lat = found[0];
+            draft.destination_lng = found[1];
+        }
+    }
+    missing: list[str] = [];
+    if not draft.origin_name {
+        missing.append("pickup");
+    }
+    if not draft.destination_name {
+        missing.append("dropoff");
+    }
+    if not draft.time {
+        missing.append("time");
+    }
+    draft.missing = missing;
+    if not draft.summary {
+        where = (draft.origin_name or "?") + " → " + (draft.destination_name or "?");
+        draft.summary = "Got it: " + where + ".";
+    }
+    return draft;
+}
+
+# ---------------------------------------------------------------------------
+# Relay Agent — 2-ride routes with an AI-picked handoff spot
+#
+# Driver A's road route passes your pickup; driver B's reaches your
+# destination. Where their routes come closest is the handoff point; Google
+# Places lists real public places there, and Gemini picks the best + safest
+# one for all three people (rules if Gemini is unavailable).
+# ---------------------------------------------------------------------------
+
+# Distance (km) from a point to a trip's straight start->end line.
+def _seg_dist_km(lat: float, lng: float, t: Trip) -> float {
+    kx = 111.32 * math.cos(math.radians(lat));
+    ky = 110.57;
+    ax = (t.origin_lng - lng) * kx;
+    ay = (t.origin_lat - lat) * ky;
+    bx = (t.destination_lng - lng) * kx;
+    by = (t.destination_lat - lat) * ky;
+    dx = bx - ax;
+    dy = by - ay;
+    length2 = dx * dx + dy * dy;
+    u = 0.0 if length2 == 0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / length2));
+    px = ax + u * dx;
+    py = ay + u * dy;
+    return math.sqrt(px * px + py * py);
+}
+
+glob RELAY_ONLY_BELOW: int = 65,       # look for 2-ride routes only when the best direct ride scores below this
+     RELAY_NEAR_KM: float = 9.0,        # pickup/dropoff this close to a driver's route (town centre to highway is often 5-8 km)
+     RELAY_MEET_KM: float = 4.0,        # the two routes must pass this close to each other
+     RELAY_MIN_WAIT: int = 3,
+     RELAY_MAX_WAIT: int = 45,
+     RELAY_MAX_RESULTS: int = 2;
+
+glob HANDOFF_TYPES: list[str] = [
+    "cafe", "coffee_shop", "library", "shopping_mall", "supermarket", "gas_station",
+    "transit_station", "bus_station", "park_and_ride", "restaurant", "fast_food_restaurant"
+];
+
+def _thin(points: list[list[float]], n: int) -> list[list[float]] {
+    if len(points) <= n {
+        return points;
+    }
+    step = len(points) / n;
+    out = [points[int(i * step)] for i in range(n)];
+    return out + [points[-1]];
+}
+
+def _cum_km(points: list[list[float]]) -> list[float] {
+    out: list[float] = [0.0];
+    for i in range(1, len(points)) {
+        out.append(out[-1] + _haversine_km(points[i - 1][0], points[i - 1][1], points[i][0], points[i][1]));
+    }
+    return out;
+}
+
+# (index of the closest route point, distance in km)
+def _nearest_on(points: list[list[float]], lat: float, lng: float) -> tuple[int, float] {
+    best = 0;
+    best_km = 1e9;
+    for (i, p) in enumerate(points) {
+        d = _haversine_km(p[0], p[1], lat, lng);
+        if d < best_km {
+            best_km = d;
+            best = i;
+        }
+    }
+    return (best, best_km);
+}
+
+def _hhmm(minutes: float) -> str {
+    total = int(round(minutes)) % (24 * 60);
+    return f"{total // 60:02d}:{total % 60:02d}";
+}
+
+def _route_of(t: Trip) -> RouteView {
+    return get_trip_route(jid(t));
+}
+
+def _find_relays(o: Trip, direct_ids: set[str]) -> list[RelayView] {
+    # Any active driver can be one leg (a leg only covers part of the trip),
+    # except drivers who are already direct matches. A cheap straight-line
+    # check keeps only drivers passing near your pickup or destination, at a
+    # plausible time, before any road routes are fetched.
+    hidden = _blocked_keys();
+    my_dep = _minutes_of_day(o.departure_time);
+    drivers: list[tuple[Trip, str]] = [];
+    for t in _public_trips() {
+        if not _is_listed(t) or t.role != "DRIVER" or t.mode != "ride" or t.owner_root == _my_root_id()
+            or jid(t) in direct_ids or _ratee_key(t.owner_root, t.owner_handle) in hidden
+            or abs(_minutes_of_day(t.departure_time) - my_dep) > 150 or not _prefs_fit(o, t) {
+            continue;
+        }
+        near_start = _seg_dist_km(o.origin_lat, o.origin_lng, t) <= RELAY_NEAR_KM + 5.0;
+        near_end = _seg_dist_km(o.destination_lat, o.destination_lng, t) <= RELAY_NEAR_KM + 5.0;
+        if near_start or near_end {
+            drivers.append((t, ""));
+        }
+    }
+    if len(drivers) < 2 {
+        return [];
+    }
+    routes: dict[str, list[list[float]]] = {};
+    for (t, mid) in drivers {
+        routes[jid(t)] = _thin(_route_of(t).points, 80);
+    }
+    # Leg 1 candidates pass your pickup; leg 2 candidates pass your destination.
+    firsts: list[dict] = [];
+    seconds: list[dict] = [];
+    for (t, mid) in drivers {
+        pts = routes[jid(t)];
+        if len(pts) < 2 {
+            continue;
+        }
+        pick = _nearest_on(pts, o.origin_lat, o.origin_lng);
+        drop = _nearest_on(pts, o.destination_lat, o.destination_lng);
+        if pick[1] <= RELAY_NEAR_KM and pick[0] < len(pts) - 1 {
+            firsts.append({"trip": t, "match": mid, "pts": pts, "pick": pick[0], "gap": pick[1]});
+        }
+        if drop[1] <= RELAY_NEAR_KM and drop[0] > 0 {
+            seconds.append({"trip": t, "match": mid, "pts": pts, "drop": drop[0], "gap": drop[1]});
+        }
+    }
+    deadline = _minutes_of_day(o.arrival_deadline) + max(o.flexible_minutes, 10) if o.time_preference == "arrive_by" and o.arrival_deadline else 99999;
+    found: list[RelayView] = [];
+    for f in firsts {
+        a = f["trip"] as Trip;
+        a_pts = f["pts"] as list[list[float]];
+        a_cum = _cum_km(a_pts);
+        a_route = _route_of(a);
+        for sec in seconds {
+            b = sec["trip"] as Trip;
+            if jid(a) == jid(b) {
+                continue;   # one driver going the whole way is a direct match, not a relay
+            }
+            b_pts = sec["pts"] as list[list[float]];
+            b_cum = _cum_km(b_pts);
+            b_route = _route_of(b);
+            # Closest approach: after A picks you up, before B drops you off.
+            best = (0, 0, 1e9);
+            for ia in range(f["pick"] as int, len(a_pts)) {
+                for ib in range(0, (sec["drop"] as int) + 1) {
+                    d = _haversine_km(a_pts[ia][0], a_pts[ia][1], b_pts[ib][0], b_pts[ib][1]);
+                    if d < best[2] {
+                        best = (ia, ib, d);
+                    }
+                }
+            }
+            if best[2] > RELAY_MEET_KM {
+                continue;
+            }
+            ia = best[0];
+            ib = best[1];
+            a_share = a_cum[ia] / a_cum[-1] if a_cum[-1] > 0 else 0.0;
+            a_pick_share = a_cum[f["pick"] as int] / a_cum[-1] if a_cum[-1] > 0 else 0.0;
+            b_share = b_cum[ib] / b_cum[-1] if b_cum[-1] > 0 else 0.0;
+            b_drop_share = b_cum[sec["drop"] as int] / b_cum[-1] if b_cum[-1] > 0 else 1.0;
+            a_dep = _minutes_of_day(a.departure_time);
+            b_dep = _minutes_of_day(b.departure_time);
+            pickup_at = a_dep + a_route.duration_min * a_pick_share;
+            at_handoff = a_dep + a_route.duration_min * a_share;
+            b_at_handoff = b_dep + b_route.duration_min * b_share;
+            wait_m = int(round(b_at_handoff - at_handoff));
+            arrive = b_dep + b_route.duration_min * b_drop_share;
+            if wait_m < RELAY_MIN_WAIT or wait_m > RELAY_MAX_WAIT or arrive > deadline {
+                continue;
+            }
+            total = int(round(arrive - pickup_at));
+            rep_a = _rating_summary(_ratee_key(a.owner_root, a.owner_handle), a.demo_rating, a.demo_reviews);
+            rep_b = _rating_summary(_ratee_key(b.owner_root, b.owner_handle), b.demo_rating, b.demo_reviews);
+            score = 96 - wait_m * 0.4 - (f["gap"] as float) * 2.5 - (sec["gap"] as float) * 2.0 - best[2] * 3.0;
+            score += 2 if rep_a[1] > 0 and rep_a[0] >= 4.5 else 0;
+            score += 2 if rep_b[1] > 0 and rep_b[0] >= 4.5 else 0;
+            meet_lat = (a_pts[ia][0] + b_pts[ib][0]) / 2;
+            meet_lng = (a_pts[ia][1] + b_pts[ib][1]) / 2;
+            found.append(RelayView(
+                id=jid(a) + ":" + jid(b), leg1_match_id=f["match"] as str, leg2_match_id=sec["match"] as str,
+                leg1_handle=a.owner_handle, leg2_handle=b.owner_handle,
+                leg1_rating=rep_a[0] as float, leg1_reviews=rep_a[1] as int,
+                leg2_rating=rep_b[0] as float, leg2_reviews=rep_b[1] as int,
+                pickup_time=_hhmm(pickup_at), handoff_time=_hhmm(at_handoff), wait_min=wait_m,
+                leg2_depart=_hhmm(b_at_handoff), arrive_time=_hhmm(arrive), total_min=total,
+                leg1_min=int(round(at_handoff - pickup_at)), leg2_min=int(round(arrive - b_at_handoff)),
+                pickup_gap_mi=float(f"{(f['gap'] as float) * 0.621371:.1f}"),
+                score=max(1, min(99, int(score))),
+                handoff=HandoffView(lat=meet_lat, lng=meet_lng),
+                leg1_points=a_pts[f["pick"] as int:ia + 1], leg2_points=b_pts[ib:(sec["drop"] as int) + 1]
+            ));
+        }
+    }
+    ranked_all = sorted(found, key=_relay_score, reverse=True);
+    ranked: list[RelayView] = [];
+    # Legs need real Match records (for chat + booking): create them on demand.
+    for r in ranked_all {
+        if len(ranked) >= RELAY_MAX_RESULTS {
+            break;
+        }
+        ids = r.id.split(":");
+        a_trip = _load_trip(ids[0]);
+        b_trip = _load_trip(ids[1]);
+        if a_trip is None or b_trip is None {
+            continue;
+        }
+        r.leg1_match_id = _ensure_match(o, a_trip as Trip);
+        r.leg2_match_id = _ensure_match(o, b_trip as Trip);
+        if r.leg1_match_id and r.leg2_match_id {
+            ranked.append(r);
+        }
+    }
+    # Judge opening hours for the day the trip actually happens.
+    day = "a weekday (Monday to Friday)" if o.recurring else _weekday_of(o.travel_date);
+    for r in ranked {
+        h = r.handoff as HandoffView;
+        r.handoff = _pick_handoff(h.lat, h.lng, r.handoff_time, r.wait_min, r.leg1_handle, r.leg2_handle, day);
+        where = r.handoff.name if r.handoff is not None and r.handoff.name else "a public spot";
+        r.why = f"{r.leg1_handle} passes your pickup and meets {r.leg2_handle}'s route near {where}; you wait about {r.wait_min} min.";
+    }
+    return ranked;
+}
+
+def _weekday_of(iso: str) -> str {
+    try {
+        return datetime.date.fromisoformat(iso).strftime("%A");
+    } except Exception {
+        return datetime.date.today().strftime("%A");
+    }
+}
+
+def _relay_score(r: RelayView) -> int {
+    return r.score;
+}
+
+# Real public places near the meeting point (Places API, New).
+def _places_near(lat: float, lng: float) -> list[dict] {
+    key = _maps_key();
+    if not key {
+        return [];
+    }
+    body = {
+        "includedTypes": HANDOFF_TYPES, "maxResultCount": 10, "rankPreference": "DISTANCE",
+        "locationRestriction": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": 2500.0}}
+    };
+    headers = {
+        "Content-Type": "application/json", "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.location,places.primaryType,places.rating,places.userRatingCount,places.businessStatus,places.regularOpeningHours.weekdayDescriptions,places.currentOpeningHours.openNow"
+    };
+    result = _http_json("https://places.googleapis.com/v1/places:searchNearby", body, headers);
+    if result is None {
+        return [];
+    }
+    out: list[dict] = [];
+    for p in result.get("places", []) {
+        if p.get("businessStatus", "OPERATIONAL") != "OPERATIONAL" {
+            continue;
+        }
+        loc = p.get("location", {});
+        out.append({
+            "name": (p.get("displayName") or {}).get("text", ""), "address": p.get("formattedAddress", ""),
+            "lat": loc.get("latitude", lat), "lng": loc.get("longitude", lng),
+            "type": str(p.get("primaryType", "")).replace("_", " "),
+            "rating": p.get("rating", 0.0), "reviews": p.get("userRatingCount", 0),
+            "open_now": (p.get("currentOpeningHours") or {}).get("openNow"),
+            "hours": ((p.get("regularOpeningHours") or {}).get("weekdayDescriptions") or [])[:7],
+            "km_from_meeting_point": round(_haversine_km(lat, lng, loc.get("latitude", lat), loc.get("longitude", lng)), 2)
+        });
+    }
+    return out;
+}
+
+# Gemini chooses the best + safest handoff for everyone; rules if it can't.
+glob _HANDOFF_CACHE: dict[str, HandoffView] = {};
+
+def _pick_handoff(lat: float, lng: float, when: str, wait_m: int, first: str, second: str, day: str) -> HandoffView {
+    cache_key = f"{lat:.3f},{lng:.3f}|{day}|{when}";
+    if cache_key in _HANDOFF_CACHE {
+        return _HANDOFF_CACHE[cache_key];
+    }
+    picked = _choose_handoff(lat, lng, when, wait_m, first, second, day);
+    if picked.source != "none" {
+        _HANDOFF_CACHE[cache_key] = picked;
+    }
+    return picked;
+}
+
+def _choose_handoff(lat: float, lng: float, when: str, wait_m: int, first: str, second: str, day: str) -> HandoffView {
+    places = _places_near(lat, lng);
+    if len(places) == 0 {
+        return HandoffView(lat=lat, lng=lng, name="Meeting point", reason="No listed public places nearby — agree on a well-lit public spot in chat.", source="none");
+    }
+    choice = _gemini_pick_handoff(places, when, wait_m, first, second, day);
+    source = "gemini";
+    if choice is None {
+        choice = _rules_pick_handoff(places);
+        source = "rules";
+    }
+    idx = max(0, min(int(choice[0]), len(places) - 1));
+    p = places[idx];
+    return HandoffView(
+        name=p["name"], address=p["address"], lat=float(p["lat"]), lng=float(p["lng"]),
+        kind=str(p["type"]).capitalize(), rating=float(p["rating"] or 0.0), reviews=int(p["reviews"] or 0),
+        open_now="",   # "open right now" isn't meaningful for a future handoff
+        reason=str(choice[1])[:220], source=source
+    );
+}
+
+def _gemini_pick_handoff(places: list[dict], when: str, wait_m: int, first: str, second: str, day: str) -> tuple[int, str] | None {
+    key = _gemini_key();
+    if not key {
+        return None;
+    }
+    model = _gemini_models()[0];
+    brief = [
+        {k: p[k] for k in ["name", "type", "rating", "reviews", "hours", "km_from_meeting_point"]}
+        for p in places
+    ];
+    prompt = (
+        f"A rider is switching between two ride-share drivers ({first} drops off, {second} picks up) "
+        f"on {day} at about {when}, waiting roughly {wait_m} minutes. Use each place's opening hours "
+        "for that day. "
+        "Choose the single best and safest public handoff place from this list: busy, well-reviewed, "
+        "open at that time, with somewhere comfortable to wait, and close to the meeting point so both "
+        "drivers barely detour. Places:\n" + json.dumps(brief)
+    );
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0, "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "index": {"type": "INTEGER", "description": "0-based index into the list"},
+                    "reason": {"type": "STRING", "description": "One short sentence for the rider on why this spot is best and safe"}
+                },
+                "required": ["index", "reason"]
+            }
+        }
+    };
+    url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
+    result = _http_json(url, body, {"Content-Type": "application/json", "x-goog-api-key": key});
+    if result is None or not result.get("candidates") {
+        return None;
+    }
+    try {
+        picked = json.loads(result["candidates"][0]["content"]["parts"][0]["text"]);
+        return (int(picked["index"]), str(picked["reason"]));
+    } except Exception as e {
+        print(f"[relay] could not read Gemini handoff pick: {e}");
+        return None;
+    }
+}
+
+def _handoff_rule_score(p: dict) -> float {
+    kind_bonus = {"cafe": 3.0, "coffee shop": 3.0, "library": 3.0, "shopping mall": 2.5, "supermarket": 2.0,
+                  "transit station": 2.0, "bus station": 1.5, "park and ride": 2.0, "gas station": 1.0};
+    busy = math.log10(1 + float(p["reviews"] or 0));
+    open_bonus = 1.5 if len(p["hours"]) > 0 else 0.0;   # has published hours
+    return kind_bonus.get(str(p["type"]), 0.5) + float(p["rating"] or 0) * 0.6 + busy + open_bonus - float(p["km_from_meeting_point"]) * 1.5;
+}
+
+def _rules_pick_handoff(places: list[dict]) -> tuple[int, str] {
+    best = 0;
+    for i in range(len(places)) {
+        if _handoff_rule_score(places[i]) > _handoff_rule_score(places[best]) {
+            best = i;
+        }
+    }
+    p = places[best];
+    return (best, f"A busy, well-reviewed {p['type']} right by where both routes meet.");
+}
+
+# ---------------------------------------------------------------------------
+# Rent together — car-rental counters near the pickup (Places API, New)
+# ---------------------------------------------------------------------------
+
+impl get_rental_spots(lat: float, lng: float) -> list[RentalSpotView] {
+    key = _maps_key();
+    if not key or not lat or not lng {
+        return [];
+    }
+    body = {
+        "includedTypes": ["car_rental"], "maxResultCount": 12, "rankPreference": "DISTANCE",
+        "locationRestriction": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": 20000.0}}
+    };
+    headers = {
+        "Content-Type": "application/json", "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.businessStatus"
+    };
+    result = _http_json("https://places.googleapis.com/v1/places:searchNearby", body, headers);
+    if result is None {
+        return [];
+    }
+    spots: list[RentalSpotView] = [];
+    places: list[dict] = (result as dict).get("places", []) as list[dict];
+    for p in places {
+        if p.get("businessStatus", "OPERATIONAL") != "OPERATIONAL" {
+            continue;
+        }
+        loc: dict = p.get("location", {}) as dict;
+        plat: float = loc.get("latitude", lat) as float;
+        plng: float = loc.get("longitude", lng) as float;
+        shown: dict = (p.get("displayName") or {}) as dict;
+        name = str(shown.get("text", "Car rental"));
+        spots.append(RentalSpotView(
+            name=name, address=str(p.get("formattedAddress", "")), lat=plat, lng=plng,
+            rating=p.get("rating", 0.0) as float, reviews=p.get("userRatingCount", 0) as int,
+            km=float(f"{_haversine_km(lat, lng, plat, plng):.1f}"),
+            maps_url="https://www.google.com/maps/search/?api=1&query=" + urlencode({"q": name})[2:] + "&query_place_id=" + str(p.get("id", ""))
+        ));
+    }
+    return spots;
+}
+
+# ---------------------------------------------------------------------------
+# Safety — block and report
+# ---------------------------------------------------------------------------
+
+# Key of the other participant of a match (same scheme as ratings).
+def _other_key(m: Match) -> str {
+    i_am_rider = m.rider_root == _my_root_id();
+    return _ratee_key(m.driver_root if i_am_rider else m.rider_root, m.driver_handle if i_am_rider else m.rider_handle);
+}
+
+# Everyone hidden from me: people I blocked, and people who blocked me.
+def _blocked_keys() -> set[str] {
+    me = _my_root_id();
+    keys: set[str] = set();
+    for b in [root.shared-->][?:Block] {
+        if b.blocker_key == me {
+            keys.add(b.blocked_key);
+        } elif b.blocked_key == me {
+            keys.add(b.blocker_key);
+        }
+    }
+    return keys;
+}
+
+def _match_blocked(m: Match) -> bool {
+    return _other_key(m) in _blocked_keys();
+}
+
+def _block(mt: Match) -> None {
+    me = _my_root_id();
+    key = _other_key(mt);
+    for b in [root.shared-->][?:Block] {
+        if b.blocker_key == me and b.blocked_key == key {
+            return;
+        }
+    }
+    i_am_rider = mt.rider_root == me;
+    blk = Block(
+        blocker_key=me, blocked_key=key,
+        blocked_handle=mt.driver_handle if i_am_rider else mt.rider_handle,
+        created_at=datetime.datetime.now().strftime("%b %d, %Y")
+    );
+    root.shared ++> blk;
+    grant(blk, level=ReadPerm);   # both sides' matching must see it
+    mt.status = "closed";
+}
+
+impl block_user(match_id: str) -> bool {
+    m = _find_match(match_id);
+    if m is None {
+        return False;
+    }
+    _block(m as Match);
+    return True;
+}
+
+impl unblock_user(key: str) -> bool {
+    me = _my_root_id();
+    for b in [root.shared-->][?:Block] {
+        if b.blocker_key == me and b.blocked_key == key {
+            b.blocker_key = "";          # neutralised; the node itself stays (edges intact)
+            b.blocked_key = "removed";
+            return True;
+        }
+    }
+    return False;
+}
+
+impl get_blocked() -> list[BlockedView] {
+    me = _my_root_id();
+    return [
+        BlockedView(key=b.blocked_key, handle=b.blocked_handle, since=b.created_at)
+        for b in [root.shared-->][?:Block] if b.blocker_key == me
+    ];
+}
+
+impl report_user(match_id: str, reason: str, details: str, also_block: bool) -> bool {
+    m = _find_match(match_id);
+    if m is None {
+        return False;
+    }
+    mt = m as Match;
+    i_am_rider = mt.rider_root == _my_root_id();
+    rep = Report(
+        reporter_root=_my_root_id(), reported_key=_other_key(mt),
+        reported_handle=mt.driver_handle if i_am_rider else mt.rider_handle,
+        match_id=jid(mt), reason=reason if reason in ["unsafe", "harassment", "spam", "no_show", "other"] else "other",
+        details=details.strip()[:2000], created_at=_iso_now()
+    );
+    root.shared ++> rep;     # not granted to anyone: reviewed by the Along team only
+    print(f"[safety] report filed: {rep.reason} about {rep.reported_handle}");
+    if also_block {
+        _block(mt);
+    }
+    return True;
+}
+
+# ---------------------------------------------------------------------------
+# Share my trip — a friend can follow the plan without an account
+# ---------------------------------------------------------------------------
+
+import from uuid { uuid4 }
+
+def _rating_label(root_id: str, handle: str, demo_rating: float, demo_reviews: int) -> str {
+    rep = _rating_summary(_ratee_key(root_id, handle), demo_rating, demo_reviews);
+    return f"★ {rep[0]:.1f} ({rep[1]} reviews)" if rep[1] else "New to Along";
+}
+
+def _clock(hhmm: str) -> str {
+    if not hhmm or ":" not in hhmm {
+        return hhmm;
+    }
+    h = int(hhmm.split(":")[0]);
+    return f"{(h % 12) or 12}:{hhmm.split(':')[1][:2]} {'PM' if h >= 12 else 'AM'}";
+}
+
+impl create_share_link(match_id: str) -> str {
+    m = _find_match(match_id);
+    if m is None {
+        return "";
+    }
+    mt = m as Match;
+    i_am_rider = mt.rider_root == _my_root_id();
+    mine = _load_trip(mt.rider_trip_id if i_am_rider else mt.driver_trip_id);
+    theirs = _load_trip(mt.driver_trip_id if i_am_rider else mt.rider_trip_id);
+    if mine is None or theirs is None {
+        return "";
+    }
+    me_t = mine as Trip;
+    ot = theirs as Trip;
+    me = _me();
+    day = "Weekdays" if me_t.recurring else (me_t.travel_date or "");
+    link = ShareLink(
+        token=uuid4().hex, owner_root=_my_root_id(), created_at=_iso_now(),
+        traveler=(me.display_name or "Your friend").split(" ")[0],
+        kind={"ride": "Ride", "rental": "Shared rental", "cab": "Shared cab"}.get(mt.mode, "Ride"),
+        route_from=me_t.origin_name, route_to=me_t.destination_name,
+        when=(day + " · " if day else "") + "leaves " + _clock(ot.departure_time if ot.role == "DRIVER" else me_t.departure_time),
+        driver=ot.owner_handle,
+        driver_rating=_rating_label(ot.owner_root, ot.owner_handle, ot.demo_rating, ot.demo_reviews),
+        arrive=_clock(me_t.arrival_deadline)
+    );
+    # A booked 2-ride trip shares both legs and the stop.
+    plan = _plan_for_match(jid(mt));
+    if plan is not None {
+        p = plan as RelayPlan;
+        link.handoff = p.handoff_name;
+        link.handoff_time = _clock(p.handoff_time);
+        link.arrive = _clock(p.arrive_time);
+        first = _load_match_any(p.leg1_match_id);
+        second = _load_match_any(p.leg2_match_id);
+        if first is not None and second is not None {
+            f = first as Match;
+            s2 = second as Match;
+            link.driver = f.driver_handle;
+            link.second_driver = s2.driver_handle;
+            link.driver_rating = _rating_label(f.driver_root, f.driver_handle, 0.0, 0);
+            link.second_rating = _rating_label(s2.driver_root, s2.driver_handle, 0.0, 0);
+        }
+    }
+    root.shared ++> link;
+    grant(link, level=ReadPerm);   # readable by token on the public share page
+    return link.token;
+}
+
+impl get_shared_trip(token: str) -> SharedTripView | None {
+    if not token {
+        return None;
+    }
+    for l in [root.shared-->][?:ShareLink] {
+        if l.token == token and not l.revoked {
+            return SharedTripView(
+                traveler=l.traveler, kind=l.kind, route_from=l.route_from, route_to=l.route_to,
+                when=l.when, driver=l.driver, driver_rating=l.driver_rating, handoff=l.handoff,
+                handoff_time=l.handoff_time, second_driver=l.second_driver,
+                second_rating=l.second_rating, arrive=l.arrive, created_at=l.created_at
+            );
+        }
+    }
+    return None;
+}
+
+# ---------------------------------------------------------------------------
+# 2-ride trips (RelayPlan)
+#
+# Privacy: the plan lives on the rider's side only. Each driver's Match holds
+# just their own leg (stop + time + status), and system messages in each chat
+# describe only that leg — a driver never learns who drives the other leg.
+# ---------------------------------------------------------------------------
+
+def _load_match_any(match_id: str) -> Match | None {
+    try {
+        obj_ = jobj(match_id);
+    } except Exception {
+        return None;
+    }
+    return obj_ as Match if isinstance(obj_, Match) else None;
+}
+
+def _plan_for_match(match_id: str) -> RelayPlan | None {
+    me = _my_root_id();
+    for p in [root.shared-->][?:RelayPlan] {
+        if p.rider_root == me and p.status == "active" and (p.leg1_match_id == match_id or p.leg2_match_id == match_id) {
+            return p;
+        }
+    }
+    return None;
+}
+
+def _load_plan(plan_id: str) -> RelayPlan | None {
+    try {
+        obj_ = jobj(plan_id);
+    } except Exception {
+        return None;
+    }
+    if isinstance(obj_, RelayPlan) and (obj_ as RelayPlan).rider_root == _my_root_id() {
+        return obj_ as RelayPlan;
+    }
+    return None;
+}
+
+def _system_message(m: Match, text: str) -> None {
+    convo = _find_conversation(m);
+    if convo is None {
+        convo = _open_conversation(m);
+    }
+    _add_message(convo as Conversation, "Along", "system", text, _now());
+}
+
+def _open_conversation(m: Match) -> Conversation {
+    existing = _find_conversation(m);
+    if existing is not None {
+        return existing as Conversation;
+    }
+    convo = Conversation(status="anonymous", identity_revealed=False, created_at=_now());
+    m +>:Opens:+> convo;
+    _share_with(convo, _other_root(m), WritePerm);
+    if m.status == "suggested" {
+        m.status = "connected";
+    }
+    return convo;
+}
+
+def _leg_text(leg: str, stop: str, when: str) -> str {
+    if leg == "first" {
+        return f"This rider wants a 2-ride trip. You'd be the first ride: pick them up on your route and drop them at {stop} around {_clock(when)}. Please accept or let them know you can't make it.";
+    }
+    return f"This rider wants a 2-ride trip. You'd be the second ride: pick them up at {stop} around {_clock(when)} and take them on along your route. Please accept or let them know you can't make it.";
+}
+
+def _attach_leg(m: Match, plan_id: str, leg: str, stop: str, when: str) -> None {
+    m.relay_plan_id = plan_id;
+    m.relay_leg = leg;
+    m.relay_status = "pending";
+    m.relay_stop = stop;
+    m.relay_time = when;
+    _system_message(m, _leg_text(leg, stop, when));
+    if _other_root(m) == "demo" {
+        # Demo travelers can't click Accept; they always say yes.
+        m.relay_status = "accepted";
+        _system_message(m, f"{m.driver_handle} accepted the {'first' if leg == 'first' else 'second'} ride.");
+        return;
+    }
+    _notify(
+        _other_root(m), "relay",
+        "2-ride trip request: you'd be the " + ("first" if leg == "first" else "second") + " ride",
+        ("Drop-off" if leg == "first" else "Pickup") + f" at {stop} around {_clock(when)}. Open the chat to accept.",
+        jid(m), ""
+    );
+}
+
+impl book_relay(
+    leg1_match_id: str, leg2_match_id: str, handoff_name: str, handoff_address: str,
+    handoff_lat: float, handoff_lng: float, handoff_time: str, pickup_time: str,
+    wait_min: int, arrive_time: str
+) -> str {
+    a = _find_match(leg1_match_id);
+    b = _find_match(leg2_match_id);
+    if a is None or b is None or leg1_match_id == leg2_match_id {
+        return "";
+    }
+    first = a as Match;
+    second = b as Match;
+    me = _my_root_id();
+    if first.rider_root != me or second.rider_root != me {
+        return "";   # only the rider books a 2-ride trip
+    }
+    existing = _plan_for_match(leg1_match_id);
+    if existing is not None and (existing as RelayPlan).leg2_match_id == leg2_match_id {
+        return jid(existing as RelayPlan);
+    }
+    stop = handoff_name.strip()[:120] or "the meeting point";
+    plan = RelayPlan(
+        rider_root=me, rider_trip_id=first.rider_trip_id,
+        leg1_match_id=leg1_match_id, leg2_match_id=leg2_match_id,
+        handoff_name=stop, handoff_address=handoff_address.strip()[:200],
+        handoff_lat=handoff_lat, handoff_lng=handoff_lng, handoff_time=handoff_time[:5],
+        pickup_time=pickup_time[:5], wait_min=wait_min, arrive_time=arrive_time[:5],
+        created_at=_iso_now()
+    );
+    root.shared ++> plan;           # not granted to the drivers
+    pid = jid(plan);
+    _attach_leg(first, pid, "first", stop, handoff_time[:5]);
+    _attach_leg(second, pid, "second", stop, handoff_time[:5]);
+    return pid;
+}
+
+def _leg_view(m: Match, leg: str, plan: RelayPlan) -> RelayLegView {
+    other = _load_trip(m.driver_trip_id);
+    rating = "New to Along";
+    depart = "";
+    if other is not None {
+        t = other as Trip;
+        rating = _rating_label(t.owner_root, t.owner_handle, t.demo_rating, t.demo_reviews);
+        depart = _clock(plan.pickup_time) if leg == "first" else _clock(plan.handoff_time);
+    }
+    return RelayLegView(
+        match_id=jid(m), leg=leg, handle=m.driver_handle, rating=rating,
+        status=m.relay_status or "pending", depart=depart,
+        arrive=_clock(plan.handoff_time) if leg == "first" else _clock(plan.arrive_time)
+    );
+}
+
+def _plan_view(p: RelayPlan, with_options: bool) -> RelayPlanView {
+    trip = _load_trip(p.rider_trip_id);
+    view = RelayPlanView(
+        id=jid(p), status=p.status, handoff_name=p.handoff_name, handoff_address=p.handoff_address,
+        handoff_lat=p.handoff_lat, handoff_lng=p.handoff_lng, handoff_time=_clock(p.handoff_time),
+        pickup_time=_clock(p.pickup_time), wait_min=p.wait_min, arrive_time=_clock(p.arrive_time),
+        route_from=(trip as Trip).origin_name if trip is not None else "",
+        route_to=(trip as Trip).destination_name if trip is not None else ""
+    );
+    legs: list[RelayLegView] = [];
+    dropped = "";
+    for (leg, mid) in [("first", p.leg1_match_id), ("second", p.leg2_match_id)] {
+        m = _load_match_any(mid);
+        if m is not None {
+            lv = _leg_view(m as Match, leg, p);
+            legs.append(lv);
+            if lv.status == "declined" {
+                dropped = leg;
+            }
+        }
+    }
+    view.legs = legs;
+    view.needs_attention = p.status == "active" and dropped != "";
+    if with_options and view.needs_attention and trip is not None {
+        # Keep the leg that's still on; offer every relay that reuses it,
+        # plus direct rides — the rider chooses, nothing auto-cancels.
+        o = trip as Trip;
+        kept = p.leg2_match_id if dropped == "first" else p.leg1_match_id;
+        dropped_id = p.leg1_match_id if dropped == "first" else p.leg2_match_id;
+        run = _run_agents(p.rider_trip_id, False);
+        options = [
+            r for r in _find_relays(o, set())
+            if (r.leg2_match_id == kept if dropped == "first" else r.leg1_match_id == kept)
+            and r.leg1_match_id != dropped_id and r.leg2_match_id != dropped_id
+        ];
+        view.alternatives = options[:3];
+        view.direct_options = [c for c in run.cards if c.overall_score >= 50 and c.id != dropped_id][:3];
+    }
+    return view;
+}
+
+impl get_relay_plan(plan_id: str) -> RelayPlanView | None {
+    p = _load_plan(plan_id);
+    return _plan_view(p as RelayPlan, True) if p is not None else None;
+}
+
+impl get_my_relay_plans() -> list[RelayPlanView] {
+    me = _my_root_id();
+    return [_plan_view(p, False) for p in [root.shared-->][?:RelayPlan] if p.rider_root == me and p.status == "active"];
+}
+
+impl respond_relay_leg(match_id: str, accept: bool) -> bool {
+    m = _find_match(match_id);
+    if m is None {
+        return False;
+    }
+    mt = m as Match;
+    if _my_role(mt) != "DRIVER" or not mt.relay_leg or mt.relay_status not in ["pending", "accepted"] {
+        return False;
+    }
+    mt.relay_status = "accepted" if accept else "declined";
+    which = "first" if mt.relay_leg == "first" else "second";
+    if accept {
+        _system_message(mt, f"{mt.driver_handle} accepted the {which} ride.");
+        _notify(mt.rider_root, "relay", f"{mt.driver_handle} accepted your {which} ride",
+            f"Meet at {mt.relay_stop} around {_clock(mt.relay_time)}.", jid(mt), mt.relay_plan_id);
+    } else {
+        _system_message(mt, f"{mt.driver_handle} can't make the {which} ride. Your other ride is still on — Along has options for you.");
+        _notify(mt.rider_root, "relay", f"{mt.driver_handle} can't make your {which} ride",
+            "Your other ride is still booked. Open your trip to pick another option.", jid(mt), mt.relay_plan_id);
+    }
+    return True;
+}
+
+impl replace_relay_leg(plan_id: str, leg: str, new_match_id: str, handoff_name: str, handoff_address: str,
+    handoff_lat: float, handoff_lng: float, handoff_time: str, arrive_time: str, wait_min: int) -> bool {
+    p = _load_plan(plan_id);
+    n = _find_match(new_match_id);
+    if p is None or n is None or leg not in ["first", "second"] {
+        return False;
+    }
+    plan = p as RelayPlan;
+    new_m = n as Match;
+    old = _load_match_any(plan.leg1_match_id if leg == "first" else plan.leg2_match_id);
+    if old is not None {
+        (old as Match).relay_status = "replaced";
+        _system_message(old as Match, "The rider changed their plan, so this ride is no longer needed. Thanks!");
+    }
+    stop = handoff_name.strip()[:120] or plan.handoff_name;
+    stop_changed = stop != plan.handoff_name or handoff_time[:5] != plan.handoff_time;
+    plan.handoff_name = stop;
+    plan.handoff_address = handoff_address.strip()[:200];
+    plan.handoff_lat = handoff_lat;
+    plan.handoff_lng = handoff_lng;
+    plan.handoff_time = handoff_time[:5];
+    plan.arrive_time = arrive_time[:5] or plan.arrive_time;
+    plan.wait_min = wait_min;
+    if leg == "first" {
+        plan.leg1_match_id = new_match_id;
+    } else {
+        plan.leg2_match_id = new_match_id;
+    }
+    _attach_leg(new_m, plan_id, leg, stop, plan.handoff_time);
+    # The driver who stayed only hears about their own stop/time, if it moved.
+    kept = _load_match_any(plan.leg2_match_id if leg == "first" else plan.leg1_match_id);
+    if kept is not None and stop_changed {
+        k = kept as Match;
+        k.relay_stop = stop;
+        k.relay_time = plan.handoff_time;
+        _system_message(k, f"Update: the meeting point is now {stop} around {_clock(plan.handoff_time)}.");
+    }
+    return True;
+}
+
+impl cancel_relay(plan_id: str) -> bool {
+    p = _load_plan(plan_id);
+    if p is None {
+        return False;
+    }
+    plan = p as RelayPlan;
+    plan.status = "cancelled";
+    for mid in [plan.leg1_match_id, plan.leg2_match_id] {
+        m = _load_match_any(mid);
+        if m is not None and (m as Match).relay_status in ["pending", "accepted"] {
+            (m as Match).relay_status = "cancelled";
+            _system_message(m as Match, "The rider cancelled this 2-ride trip. Thanks for offering!");
+        }
+    }
+    return True;
+}
+
+# ---------------------------------------------------------------------------
+# Email verification status — read from the login account (jac-scale), then
+# mirrored onto the profile and a public badge.
+# ---------------------------------------------------------------------------
+
+import from jac_scale.user_manager { JacScaleUserManager }
+
+glob _USER_MANAGER: list[any] = [];
+
+def _user_manager() -> any {
+    if len(_USER_MANAGER) == 0 {
+        _USER_MANAGER.append(JacScaleUserManager(base_path=Jac.get_base_path_dir()));
+    }
+    return _USER_MANAGER[0];
+}
+
+# (email, verified) for the calling user's login account.
+def _my_email_identity() -> tuple[str, bool] {
+    me = _my_root_id().replace("-", "");
+    try {
+        for u in _user_manager().list_all_users(1000, 0) {
+            if str(u.get("root_id", "")).replace("-", "") == me {
+                for ident in u.get("identities", []) {
+                    if ident.get("type") == "email" {
+                        return (str(ident.get("value_normalized") or ident.get("value_raw") or ""), bool(ident.get("verified")));
+                    }
+                }
+            }
+        }
+    } except Exception as e {
+        print(f"[verify] could not read account: {e}");
+    }
+    return ("", False);
+}
+
+def _has_badge(root_key: str) -> bool {
+    for b in [root.shared-->][?:VerifiedBadge] {
+        if b.user_key == root_key {
+            return True;
+        }
+    }
+    return False;
+}
+
+def _sync_email_verified() -> tuple[str, bool] {
+    status = _my_email_identity();
+    me = _me();
+    ok: bool = status[1] as bool;
+    if ok and not me.verified {
+        me.verified = True;
+    }
+    if ok and not _has_badge(_my_root_id()) {
+        badge = VerifiedBadge(user_key=_my_root_id(), since=datetime.datetime.now().strftime("%b %Y"));
+        root.shared ++> badge;
+        grant(badge, level=ReadPerm);
+    }
+    return status;
+}
+
+impl get_email_status() -> EmailStatusView {
+    status = _sync_email_verified();
+    return EmailStatusView(email=status[0] as str, verified=status[1] as bool);
+}
+
+# ---------------------------------------------------------------------------
+# Relevance + preference gates (used by the Route Scout and the Relay Agent)
+# ---------------------------------------------------------------------------
+
+glob CAB_START_KM: float = 6.0,       # shared cab: start this close
+     CAB_END_KM: float = 10.0,        # ...and drop-offs this close
+     CAB_TIME_MIN: int = 120,         # ...within two hours (further off ranks lower; they can agree on a time)
+     RENTAL_START_KM: float = 20.0,
+     RENTAL_END_KM: float = 30.0,
+     RIDE_START_KM: float = 35.0,     # driver's start area vs rider's
+     RIDE_END_KM: float = 35.0,
+     RIDE_TIME_MIN: int = 120;
+
+def _days_apart(a: str, b: str) -> int {
+    try {
+        return abs((datetime.date.fromisoformat(a) - datetime.date.fromisoformat(b)).days);
+    } except Exception {
+        return 0;
+    }
+}
+
+def _relevant(o: Trip, t: Trip, route: dict) -> bool {
+    og: float = route["origin_gap"] as float;
+    dg: float = route["dest_gap"] as float;
+    gap_min = abs(_time_fit(o, t)["delta"] as int);
+    same_way = _heading_cos(o, t) >= 0.5;
+    # Short trips need close destinations; long ones can tolerate more.
+    my_km = _trip_km(o);
+    if o.mode == "cab" {
+        same_day = not o.travel_date or not t.travel_date or _days_apart(o.travel_date, t.travel_date) == 0 or o.recurring or t.recurring;
+        end_ok = dg <= min(CAB_END_KM, max(3.0, 0.4 * my_km));
+        return og <= CAB_START_KM and end_ok and same_way and gap_min <= CAB_TIME_MIN and same_day;
+    }
+    if o.mode == "rental" {
+        dates_ok = not o.travel_date or not t.travel_date or _days_apart(o.travel_date, t.travel_date) <= 1;
+        end_ok = dg <= min(RENTAL_END_KM, max(5.0, 0.4 * my_km));
+        # A move needs cargo space; a road trip doesn't — don't mix the two.
+        # Someone has to drive: two non-drivers can't share a car.
+        driver_ok = not (o.needs_driver and t.needs_driver);
+        return og <= RENTAL_START_KM and end_ok and same_way and dates_ok and o.moving_help == t.moving_help and driver_ok;
+    }
+    # Rides: the driver must head the same way and not go far out of their way.
+    extra: float = (route["extra_km"] as float) if "extra_km" in route else dg;
+    driver_km: float = (route["driver_km"] as float) if "driver_km" in route else my_km;
+    detour_ok = extra <= min(30.0, max(15.0, 0.5 * driver_km));
+    return og <= RIDE_START_KM and same_way and detour_ok and gap_min <= RIDE_TIME_MIN;
+}
+
+# Does `person` (age, gender) fit the preferences set on journey `wants`?
+def _fits(wants: Trip, age: int, gender: str) -> bool {
+    # A limit someone set is only met by people who shared that detail.
+    if wants.age_min > 1 or wants.age_max < 100 {
+        if age <= 0 or age < wants.age_min or (wants.age_max < 100 and age > wants.age_max) {
+            return False;
+        }
+    }
+    if len(wants.gender_prefs) > 0 and gender not in wants.gender_prefs {
+        return False;
+    }
+    return True;
+}
+
+# Preferences must hold both ways.
+def _prefs_fit(a: Trip, b: Trip) -> bool {
+    if not _fits(a, b.owner_age, b.owner_gender) or not _fits(b, a.owner_age, a.owner_gender) {
+        return False;
+    }
+    return True;
+}
+
+# The Match between my trip and a driver's, created on demand (relay legs can
+# use drivers who aren't a direct match). "" if that pairing was declined.
+def _ensure_match(o: Trip, t: Trip) -> str {
+    for m in _my_matches() {
+        if m.rider_trip_id == jid(o) and m.driver_trip_id == jid(t) {
+            return "" if m.status == "closed" else jid(m);
+        }
+    }
+    route = _route_overlap(o, t);
+    time_score = _time_fit(o, t)["score"] as int;
+    pref_score = _preference_compat(_preference_of(o), _preference_of(t));
+    cost = _cost_benefit(o, t, route["origin_gap"] as float, route["dest_gap"] as float);
+    overall = _score_match(route["overlap"] as int, route["detour"] as int, time_score, pref_score, cost["score"] as int);
+    gap_miles: float = (route["origin_gap"] as float) * 0.621371;
+    m = Match(
+        overall_score=overall, route_score=route["overlap"] as int, time_score=time_score,
+        detour_minutes=route["detour"] as int, preference_score=pref_score,
+        cost_benefit_score=cost["score"] as int, estimated_rider_savings=cost["rider_savings"] as float,
+        estimated_driver_contribution=cost["driver_contribution"] as float, status="suggested",
+        rider_handle=o.owner_handle, driver_handle=t.owner_handle,
+        rider_trip_id=jid(o), driver_trip_id=jid(t), rider_root=o.owner_root, driver_root=t.owner_root,
+        created_at=_now(), mode=o.mode, pickup_gap_miles=float(f"{gap_miles:.1f}")
+    );
+    root.shared ++> m;
+    _share_with(m, t.owner_root, WritePerm);
+    return jid(m);
 }

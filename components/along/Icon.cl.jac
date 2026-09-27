@@ -26,6 +26,12 @@ glob ICON_PATHS: dict[str, JsxElement] = {
     "search": <g><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></g>,
     "graph": <g><circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="8" r="2.5" /><circle cx="10" cy="18" r="2.5" /><path d="M8.3 7 15.6 7.6M16.6 10.1l-5 6M7 8.4l2.2 7.2" /></g>,
     "logout": <path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h11" />,
+    "dots": <g><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></g>,
+    "flag": <path d="M5 21V4m0 0h11l-2 4 2 4H5" />,
+    "block": <g><circle cx="12" cy="12" r="9" /><path d="m6 6 12 12" /></g>,
+    "share": <g><path d="M12 15V3m0 0-4 4m4-4 4 4" /><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" /></g>,
+    "bell": <g><path d="M6 16v-5a6 6 0 1 1 12 0v5l2 2H4l2-2Z" /><path d="M10 20a2 2 0 0 0 4 0" /></g>,
+    "spark": <path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6" />,
 };
 
 def:pub Icon(name: str, size: int = 20, className: str = "") -> JsxElement {

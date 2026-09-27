@@ -10,7 +10,9 @@ A journey "kind" is one of the four Figma entry points:
 
 sv import from ..services.along { TripView, MatchCardView }
 
-glob FLOW_KEYS: list[str] = ["ride", "buddy", "rental", "cab"];
+# "Split a cab" lives inside "Find a ride" (a choice on that page), so the
+# nav and home show three entry points while cab journeys keep their own kind.
+glob FLOW_KEYS: list[str] = ["ride", "buddy", "rental"];
 
 def:pub flow_keys() -> list[str] {
     return FLOW_KEYS;
@@ -19,9 +21,9 @@ def:pub flow_keys() -> list[str] {
 def:pub flow_info(kind: str) -> dict[str, str] {
     if kind == "buddy" {
         return {
-            "title": "Find a buddy", "eyebrow": "I’m offering a ride", "icon": "users",
+            "title": "Offer a ride", "eyebrow": "I’m driving", "icon": "users",
             "description": "Post your route and find people nearby who need a ride.",
-            "detail": "I’m offering a ride and want to find someone going my way.",
+            "detail": "I’m driving and have seats to share.",
             "heading": "Where are you driving?", "origin": "Flint, MI", "destination": "Ann Arbor, MI",
             "result_title": "Riders along your route", "marker": "R", "marker_label": "Ride request",
             "accent": "blue", "submit": "Post route & find riders"
@@ -29,9 +31,9 @@ def:pub flow_info(kind: str) -> dict[str, str] {
     }
     if kind == "rental" {
         return {
-            "title": "Rent together", "eyebrow": "Share a car rental", "icon": "key",
+            "title": "Share a rental", "eyebrow": "Share a car rental", "icon": "key",
             "description": "Choose a vehicle and connect with compatible rental partners.",
-            "detail": "I want to share a car rental with someone.",
+            "detail": "Split a rental car — or a truck for moving.",
             "heading": "Plan your shared rental", "origin": "Novi, MI", "destination": "Detroit, MI",
             "result_title": "Potential rental partners", "marker": "P", "marker_label": "Rental partner",
             "accent": "purple", "submit": "Find rental partners"
@@ -39,22 +41,33 @@ def:pub flow_info(kind: str) -> dict[str, str] {
     }
     if kind == "cab" {
         return {
-            "title": "Share a cab", "eyebrow": "Split a similar journey", "icon": "cab",
-            "description": "Find people traveling from a similar point A to point B.",
-            "detail": "I want to split a cab with people traveling a similar route.",
-            "heading": "Where are you headed?", "origin": "Detroit Metro Airport",
+            "title": "Split a cab", "eyebrow": "I need a ride · split a cab", "icon": "cab",
+            "description": "Share a taxi or Uber fare with people going the same way.",
+            "detail": "Split a cab with people going the same way.",
+            "heading": "Where do you need to go?", "origin": "Detroit Metro Airport",
             "destination": "Downtown Detroit", "result_title": "People with similar journeys",
             "marker": "C", "marker_label": "Cab share", "accent": "amber", "submit": "Find cab partners"
         };
     }
     return {
         "title": "Find a ride", "eyebrow": "I need a ride", "icon": "car",
-        "description": "Connect with a trusted driver already heading your way.",
-        "detail": "I need a ride from someone driving.",
-        "heading": "Tell us about your journey", "origin": "Grand Blanc, MI",
+        "description": "Ride with a trusted driver already heading your way — or split a cab.",
+        "detail": "Ride with a driver heading your way, or split a cab.",
+        "heading": "Where do you need to go?", "origin": "Grand Blanc, MI",
         "destination": "Ann Arbor, MI", "result_title": "Drivers heading your way", "marker": "D",
         "marker_label": "Ride offer", "accent": "green", "submit": "Show matching rides"
     };
+}
+
+# One plain label per match, instead of a fit badge plus a separate percentage.
+def:pub match_label(score: int) -> str {
+    if score >= 85 {
+        return "Great match · " + str(score) + "%";
+    }
+    if score >= 70 {
+        return "Good match · " + str(score) + "%";
+    }
+    return "Possible match · " + str(score) + "%";
 }
 
 def:pub flow_of(mode: str, role: str) -> str {
@@ -119,6 +132,26 @@ def:pub today_iso() -> str {
     return iso[:10];
 }
 
+# ISO timestamp -> "just now" / "5m ago" / "3h ago" / "2d ago".
+def:pub time_ago(iso: str) -> str {
+    if not iso {
+        return "";
+    }
+    then: float = new(Date, iso).getTime();
+    now: float = new(Date).getTime();
+    mins = int((now - then) / 60000);
+    if mins < 1 {
+        return "just now";
+    }
+    if mins < 60 {
+        return str(mins) + "m ago";
+    }
+    if mins < 1440 {
+        return str(int(mins / 60)) + "h ago";
+    }
+    return str(int(mins / 1440)) + "d ago";
+}
+
 def:pub short_place(name: str) -> str {
     return (name or "").split(",")[0];
 }
@@ -128,6 +161,20 @@ def:pub plural(n: int, one: str, many: str) -> str {
 }
 
 # "MapleDriver" -> "MD", "Rider 184" -> "R1", "Alex Kim" -> "AK"
+# A whole-number age typed into a form, or 0 if it isn't one.
+def:pub parse_age(text: str) -> int {
+    clean = text.strip();
+    if not clean or len(clean) > 3 {
+        return 0;
+    }
+    for ch in clean {
+        if ch < "0" or ch > "9" {
+            return 0;
+        }
+    }
+    return int(clean);
+}
+
 def:pub initials(name: str) -> str {
     clean = (name or "").strip();
     if not clean {
@@ -166,7 +213,7 @@ def:pub when_text(card: MatchCardView) -> str {
         return "";
     }
     if card.mode == "rental" {
-        return (fmt_date(other.travel_date) or "Flexible dates") + " · from " + fmt_time(other.departure_time);
+        return rental_dates(other) + " · pickup " + fmt_time(other.departure_time);
     }
     if card.mode == "cab" {
         return "Ready around " + fmt_time(other.departure_time);
@@ -183,7 +230,8 @@ def:pub meta_text(card: MatchCardView) -> str {
         return "";
     }
     if card.mode == "rental" {
-        return plural(other.people, "person", "people") + " · " + (other.vehicle or "Any vehicle");
+        space = (" · space: " + other.space_needed) if other.space_needed else "";
+        return plural(other.people, "person", "people") + " · " + (other.vehicle or "Any vehicle") + space;
     }
     if card.mode == "ride" and other.role == "DRIVER" {
         return plural(other.seats_available, "seat", "seats") + " · near " + short_place(other.origin_name);
@@ -191,10 +239,22 @@ def:pub meta_text(card: MatchCardView) -> str {
     return plural(other.people, "person", "people") + " · " + short_place(other.origin_name);
 }
 
+# "Sat, Oct 3 → Mon, Oct 5" for a rental (or just the pickup day).
+def:pub rental_dates(t: TripView) -> str {
+    start = fmt_date(t.travel_date) or "Flexible dates";
+    if t.return_date and t.return_date != t.travel_date {
+        return start + " → " + fmt_date(t.return_date);
+    }
+    return start;
+}
+
 # What the searcher asked for, for the results toolbar ("Sat, May 24 · Arrive by 9:00 AM").
 def:pub trip_timing(t: TripView | None) -> str {
     if t is None {
         return "";
+    }
+    if t.mode == "rental" {
+        return rental_dates(t) + " · pickup " + fmt_time(t.departure_time);
     }
     day = "Weekdays" if t.recurring else (fmt_date(t.travel_date) or "One time");
     trip = " · Round trip" if t.round_trip else "";

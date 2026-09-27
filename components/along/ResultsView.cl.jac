@@ -6,14 +6,15 @@
 """
 
 import from "@jac/runtime" { useNavigate, useLocation }
+import from react { useEffect }
 import from .Icon { Icon }
 import from .AppHeader { AppHeader }
 import from .MapCanvas { MapCanvas }
 import from ...lib.along {
     flow_info, flow_of_trip, short_place, initials, rating_text, has_rating,
-    when_text, meta_text, trip_timing
+    when_text, meta_text, trip_timing, fmt_time, match_label
 }
-sv import from ...services.along { run_matching, get_match_results, get_my_trip, TripView, MatchCardView }
+sv import from ...services.along { run_agents, get_match_results, get_my_trip, book_relay, post_journey, switch_journey, TripView, MatchCardView, AgentRunView, AgentStepView, RelayView }
 
 # Keyed on the URL so /results?tripId=… and /matches never share stale state.
 def:pub ResultsRoute() -> JsxElement {
@@ -34,31 +35,85 @@ def:pub ResultsView() -> JsxElement {
         view: str = "list",
         sort_by: str = "fit",
         min_score: int = 0,
-        filters_open: bool = False;
+        filters_open: bool = False,
+        # searching -> revealing -> ready: drives the map/list search animation.
+        phase: str = "searching" if trip_id else "ready",
+        step: int = 0,
+        agent_steps: list[AgentStepView] = [],
+        relays: list[RelayView] = [],
+        relay_id: str = "",
+        report_open: bool = False,
+        posted: bool = False,
+        posting: bool = False,
+        notified: int = -1,
+        ticks: Ref[int] = Ref(0);
 
     nav = useNavigate();
 
     async can with entry {
         # Declared up front: branch-local names don't survive the if/else in JS.
         found: list[MatchCardView] = [];
+        started: float = new(Date).getTime();
         try {
             if trip_id {
                 my_trip = await get_my_trip(trip_id);
-                found = await run_matching(trip_id);
+                posted = my_trip is not None and my_trip.posted;
+                run: AgentRunView = await run_agents(trip_id);
+                found = run.cards;
+                agent_steps = run.steps;
+                relays = run.relays;
+                # Let the search animation play for a beat even when matching is instant.
+                elapsed: float = new(Date).getTime() - started;
+                if elapsed < SEARCH_MIN_MS {
+                    await _sleep(SEARCH_MIN_MS - elapsed);
+                }
             } else {
                 found = await get_match_results();
             }
             cards = found;
             status = "ready" if len(found) > 0 else "empty";
+            if trip_id {
+                phase = "revealing";
+                await _sleep(REVEAL_STEP_MS * min(len(found), 6) + 900);
+            }
         } except Exception as e {
             status = "error";
         }
+        phase = "ready";
     }
+
+    # Advance the "what Along is doing" checklist while the search runs.
+    useEffect(lambda {
+        if phase != "searching" {
+            return lambda { };
+        }
+        timer = setInterval(lambda {  # jac:ignore[W2001]
+            n: int = (ticks.current or 0) + 1;
+            ticks.current = n;
+            step = n;
+        }, 520);
+        return lambda { clearInterval(timer); };  # jac:ignore[W2001]
+    }, [phase]);
 
     shown = _sorted(cards, sort_by);
     shown = [c for c in shown if c.overall_score >= min_score];
     sel = selected if selected < len(shown) else 0;
     focus = shown[sel] if len(shown) > 0 else None;
+    async def switch_to(mode: str) -> None {
+        new_id: str = await switch_journey(trip_id, mode);
+        if new_id {
+            window.location.assign("/results?tripId=" + new_id);  # jac:ignore[E1030]
+        }
+    }
+
+    async def post_it -> None {
+        posting = True;
+        told: int = await post_journey(trip_id);
+        notified = told;
+        posted = True;
+        posting = False;
+    }
+
     route_trip = my_trip if my_trip is not None else (focus.my_trip if focus is not None else None);
     kind = flow_of_trip(route_trip);
     info = flow_info(kind);
@@ -66,7 +121,13 @@ def:pub ResultsView() -> JsxElement {
 
     def open_details(match_id: str) { nav("/matches/" + match_id); }
     def open_chat(match_id: str) { nav("/chat/" + match_id); }
-    def pick(i: int) { selected = i; }
+    def open_profile(match_id: str) { nav("/people/" + match_id); }
+    def pick(i: int) {
+        selected = i;
+        relay_id = "";
+    }
+    active_relays = [r for r in relays if r.id == relay_id];
+    active_relay: RelayView | None = active_relays[0] if len(active_relays) > 0 else None;
     def set_filter(score: int) {
         min_score = score;
         selected = 0;
@@ -78,11 +139,13 @@ def:pub ResultsView() -> JsxElement {
         subtitle = "Finding the best route overlaps…";
     } elif status == "error" {
         subtitle = "Something went wrong while matching.";
+    } elif len(shown) == 0 and len(relays) > 0 {
+        subtitle = str(len(relays)) + (" way" if len(relays) == 1 else " ways") + " to get there with two rides";
     } elif len(shown) == 0 {
-        subtitle = "Try expanding your distance or timing.";
+        subtitle = "No matches yet — post it and we’ll let you know.";
     } else {
         subtitle = (str(len(shown)) + (" promising match" if len(shown) == 1 else " promising matches"))
-            + " · Sorted by " + ("route fit" if sort_by == "fit" else "time");
+            + " · " + ("best match first" if sort_by == "fit" else "earliest first");
     }
 
     return <div className="app-shell">
@@ -90,7 +153,7 @@ def:pub ResultsView() -> JsxElement {
         <main className="results-page">
             <div className="results-toolbar">
                 <button className="back-link" onClick={lambda (e: MouseEvent) { nav("/journey/" + kind); }}>
-                    <Icon name="back" /> {"Change journey" if trip_id else "New journey"}
+                    <Icon name="back" /> {"Edit search" if trip_id else "New search"}
                 </button>
                 {if route_trip is not None {
                     <div key="summary" className="route-summary">
@@ -102,20 +165,6 @@ def:pub ResultsView() -> JsxElement {
                         </div>
                     </div>
                 }}
-                <div className="toolbar-buttons">
-                    <button className="btn btn-secondary" onClick={lambda (e: MouseEvent) { filters_open = not filters_open; }}>
-                        Filters {min_score > 0 and <b>1</b>}
-                        <Icon name="tune" />
-                    </button>
-                    {if filters_open {
-                        <div key="menu" className="filter-menu" role="menu">
-                            <small>Minimum match</small>
-                            <button className={"active" if min_score == 0 else ""} onClick={lambda (e: MouseEvent) { set_filter(0); }}>All matches</button>
-                            <button className={"active" if min_score == 70 else ""} onClick={lambda (e: MouseEvent) { set_filter(70); }}>Good fit or better</button>
-                            <button className={"active" if min_score == 85 else ""} onClick={lambda (e: MouseEvent) { set_filter(85); }}>Excellent fit only</button>
-                        </div>
-                    }}
-                </div>
             </div>
             <div className="mobile-view-toggle">
                 <button className={"active" if view == "list" else ""} onClick={lambda (e: MouseEvent) { view = "list"; }}><Icon name="list" /> List</button>
@@ -128,47 +177,104 @@ def:pub ResultsView() -> JsxElement {
                             <span className="step-kicker">{"Step 2 of 2" if trip_id else "All journeys"}</span>
                             <h1>{title}</h1>
                             <p>{subtitle}</p>
-                        </div>
-                        <button className="sort-button" onClick={lambda (e: MouseEvent) { sort_by = "time" if sort_by == "fit" else "fit"; selected = 0; }}>
-                            {"Best fit" if sort_by == "fit" else "Earliest"} <Icon name="chevron" />
-                        </button>
-                    </div>
-                    {if status == "loading" {
-                        <div key="loading" className="loading-state">
-                            <span className="spinner" />
-                            <h3>Looking along your route</h3>
-                            <p>Comparing timing, pickup distance, and preferences.</p>
-                            <div className="skeleton" />
-                            <div className="skeleton short" />
-                        </div>
-                    } elif len(shown) == 0 {
-                        <div key="empty" className="empty-state">
-                            <span><Icon name="map" size={30} /></span>
-                            <h3>{"Couldn’t load matches" if status == "error" else "No close matches yet"}</h3>
-                            <p>{"Please try again in a moment." if status == "error" else "Widen your pickup distance or adjust timing to see more people."}</p>
-                            {if min_score > 0 {
-                                <button key="clear" className="btn btn-primary" onClick={lambda (e: MouseEvent) { set_filter(0); }}>Show all matches</button>
-                            } else {
-                                <button key="edit" className="btn btn-primary" onClick={lambda (e: MouseEvent) { nav("/journey/" + kind); }}>Expand search</button>
+                            {if trip_id and (kind == "ride" or kind == "cab") and phase != "searching" {
+                                <button key="switch" className="switch-link" onClick={lambda (e: MouseEvent) { switch_to("cab" if kind == "ride" else "ride"); }}>
+                                    <Icon name={"cab" if kind == "ride" else "car"} size={15} />
+                                    {"Or split a cab for the same trip" if kind == "ride" else "Or look for drivers heading your way"}
+                                </button>
                             }}
                         </div>
+                        <div className="list-tools">
+                            <button className="sort-button" onClick={lambda (e: MouseEvent) { sort_by = "time" if sort_by == "fit" else "fit"; selected = 0; }}>
+                                {"Best match" if sort_by == "fit" else "Earliest"} <Icon name="chevron" />
+                            </button>
+                            <div className="toolbar-buttons">
+                                <button className="btn btn-secondary" onClick={lambda (e: MouseEvent) { filters_open = not filters_open; }}>
+                        Filters {min_score > 0 and <b>1</b>}
+                        <Icon name="tune" />
+                    </button>
+                    {if filters_open {
+                        <div key="menu" className="filter-menu" role="menu">
+                            <small>Minimum match</small>
+                            <button className={"active" if min_score == 0 else ""} onClick={lambda (e: MouseEvent) { set_filter(0); }}>All matches</button>
+                            <button className={"active" if min_score == 70 else ""} onClick={lambda (e: MouseEvent) { set_filter(70); }}>Good matches or better</button>
+                            <button className={"active" if min_score == 85 else ""} onClick={lambda (e: MouseEvent) { set_filter(85); }}>Great matches only</button>
+                        </div>
+                    }}
+                            </div>
+                        </div>
+                    </div>
+                    {if status == "loading" or phase == "searching" {
+                        <SearchSteps key="searching" step={step} />
+                    } elif len(shown) == 0 and len(relays) == 0 {
+                        if min_score > 0 or status == "error" {
+                            <div key="empty" className="empty-state">
+                                <span><Icon name="map" size={30} /></span>
+                                <h3>{"Couldn’t load matches" if status == "error" else "No matches at this level"}</h3>
+                                <p>{"Please try again in a moment." if status == "error" else "Try showing all matches."}</p>
+                                {min_score > 0 and <button className="btn btn-primary" onClick={lambda (e: MouseEvent) { set_filter(0); }}>Show all matches</button>}
+                            </div>
+                        } elif trip_id {
+                            <PostPanel
+                                key="post" kind={kind} posted={posted} posting={posting} notified={notified}
+                                empty={True} onPost={lambda { post_it(); }} onEdit={lambda { nav("/journey/" + kind); }}
+                                onProfile={lambda { nav("/profile"); }}
+                            />
+                        }
                     } else {
-                        <div key="cards" className="cards">
+                        if trip_id and phase != "searching" {
+                            <PostPanel
+                                key="post" kind={kind} posted={posted} posting={posting} notified={notified}
+                                empty={False} onPost={lambda { post_it(); }} onEdit={lambda { nav("/journey/" + kind); }}
+                                onProfile={lambda { nav("/profile"); }}
+                            />
+                        }
+                        if len(relays) > 0 and phase != "searching" {
+                            <div key="relays" className="relay-list">
+                                <p className="relay-intro">{"No one drives the whole way — two rides get you there on time." if len(shown) == 0 else "Two rides fit your time better than the direct options below."}</p>
+                                {for r in relays {
+                                    <RelayCard
+                                        key={r.id} relay={r} selected={r.id == relay_id}
+                                        onSelect={lambda { relay_id = r.id; view = "map" if view == "map" else view; }}
+                                        onMessage={open_chat}
+                                    />
+                                }}
+                            </div>
+                        }
+                        <div key="cards" className={"cards" + (" revealing" if phase == "revealing" else "")}>
                             {for (i, c) in enumerate(shown) {
                                 <ResultCard
-                                    key={c.id} card={c} selected={sel == i}
+                                    key={c.id} card={c} selected={sel == i} rank={i + 1}
+                                    delay={(min(i, 6) * REVEAL_STEP_MS) / 1000.0 if phase == "revealing" else 0.0}
                                     onSelect={lambda { pick(i); }}
-                                    onDetails={open_details} onMessage={open_chat}
+                                    onDetails={open_details} onMessage={open_chat} onProfile={open_profile}
                                 />
                             }}
                         </div>
                     }}
                 </section>
                 <section className={"map-panel" + (" mobile-hidden-map" if view == "list" else "")}>
-                    <MapCanvas my_trip={route_trip} cards={shown} selected={sel} onSelect={pick} kind={kind} />
+                    <MapCanvas my_trip={route_trip} cards={shown} selected={sel} onSelect={pick} kind={kind} phase={phase} relay={active_relay} />
                 </section>
             </div>
         </main>
+    </div>;
+}
+
+glob SEARCH_MIN_MS: float = 2600.0,
+     REVEAL_STEP_MS: float = 420.0,
+     SEARCH_STEPS: list[list[str]] = [];
+
+async def _sleep(ms: float) -> None {
+    await new(Promise, lambda (resolve: any, reject: any) { setTimeout(resolve, ms); });  # jac:ignore[E1053]
+}
+
+# While matching runs: one calm line; the map traces your route meanwhile.
+def:pub SearchSteps(step: int) -> JsxElement {
+    return <div className="search-steps" role="status" aria-live="polite">
+        <div className="search-orb"><span /><span /><span /><Icon name="map" size={26} /></div>
+        <h3>Finding people on your route…</h3>
+        <p>This takes a few seconds.</p>
     </div>;
 }
 
@@ -189,7 +295,8 @@ def _sorted(cards: list[MatchCardView], sort_by: str) -> list[MatchCardView] {
 
 def:pub ResultCard(
     card: MatchCardView, selected: bool, onSelect: Callable[[], None],
-    onDetails: Callable[[str], None], onMessage: Callable[[str], None]
+    onDetails: Callable[[str], None], onMessage: Callable[[str], None], delay: float = 0.0,
+    onProfile: Callable[[str], None] | None = None, rank: int = 0
 ) -> JsxElement {
     other = card.other_trip;
     mine = card.my_trip;
@@ -203,18 +310,28 @@ def:pub ResultCard(
         e.stopPropagation();
         onMessage(card.id);
     }
+    def profile(e: MouseEvent) {
+        e.stopPropagation();
+        if onProfile {
+            onProfile(card.id);
+        }
+    }
 
-    return <article className={"result-card" + (" selected" if selected else "")} onClick={select}>
+    return <article
+        className={"result-card" + (" selected" if selected else "") + (" card-enter" if delay > 0 else "")}
+        style={{"animationDelay": str(delay) + "s"}} onClick={select}
+    >
         <div className="result-top">
+            {rank > 0 and <span className="rank-chip" title="Number on the map">{str(rank)}</span>}
             <span className="avatar">{initials(card.other_handle)}</span>
             <div>
-                <h3>{card.other_handle}</h3>
+                <h3><button className="name-link" onClick={profile} title="View profile">{card.other_handle}</button></h3>
                 <span className={"rating" if has_rating(other) else "new-user"}>
                     {has_rating(other) and <Icon name="star" size={14} />}
                     {rating_text(other)}
                 </span>
             </div>
-            <span className="fit-badge">{card.fit_label}</span>
+            <span className="fit-badge">{match_label(card.overall_score)}</span>
         </div>
         <div className="result-route">
             <span><i /><i /></span>
@@ -227,7 +344,6 @@ def:pub ResultCard(
         <div className="result-time">
             <Icon name="clock" />
             <strong>{when_text(card)}</strong>
-            <span className="score-pill">{str(card.overall_score) + "% match"}</span>
         </div>
         <p className="why"><strong>Why it matches</strong>{card.why}</p>
         <div className="card-actions">
@@ -236,4 +352,147 @@ def:pub ResultCard(
             <button className="btn btn-primary" onClick={message}>Message <Icon name="chat" /></button>
         </div>
     </article>;
+}
+
+# A 2-ride route: driver A -> AI-picked handoff spot -> driver B.
+def:pub RelayCard(relay: RelayView, selected: bool, onSelect: Callable[[], None], onMessage: Callable[[str], None]) -> JsxElement {
+    has booking: bool = False,
+        error: str = "";
+
+    nav = useNavigate();
+    h = relay.handoff;
+
+    async def book -> None {
+        booking = True;
+        # Local names match book_relay's parameters.
+        leg1_match_id = relay.leg1_match_id;
+        leg2_match_id = relay.leg2_match_id;
+        handoff_name = h.name if h is not None else "";
+        handoff_address = h.address if h is not None else "";
+        handoff_lat = h.lat if h is not None else 0.0;
+        handoff_lng = h.lng if h is not None else 0.0;
+        handoff_time = relay.handoff_time;
+        pickup_time = relay.pickup_time;
+        wait_min = relay.wait_min;
+        arrive_time = relay.arrive_time;
+        plan_id: str = await book_relay(
+            leg1_match_id, leg2_match_id, handoff_name, handoff_address, handoff_lat,
+            handoff_lng, handoff_time, pickup_time, wait_min, arrive_time
+        );
+        booking = False;
+        if plan_id {
+            nav("/plans/" + plan_id);
+        } else {
+            error = "Couldn’t book this trip. Please try again.";
+        }
+    }
+    maps_url = ("https://www.google.com/maps/search/?api=1&query=" + str(h.lat) + "," + str(h.lng)) if h is not None else "";
+
+    def msg1(e: MouseEvent) {
+        e.stopPropagation();
+        onMessage(relay.leg1_match_id);
+    }
+    def msg2(e: MouseEvent) {
+        e.stopPropagation();
+        onMessage(relay.leg2_match_id);
+    }
+
+    return <article className={"relay-card" + (" selected" if selected else "")} onClick={lambda (e: MouseEvent) { onSelect(); }}>
+        <div className="relay-head">
+            <span className="relay-badge">2-ride route</span>
+            <strong>{"Arrive " + fmt_time(relay.arrive_time)}</strong>
+            <small>{str(relay.total_min) + " min door to door · " + str(relay.wait_min) + " min wait at the stop"}</small>
+        </div>
+        <ol className="relay-legs">
+            <li>
+                <span className="avatar avatar-small">{initials(relay.leg1_handle)}</span>
+                <div>
+                    <strong>{relay.leg1_handle + " picks you up · " + fmt_time(relay.pickup_time)}</strong>
+                    <small>{_rep(relay.leg1_rating, relay.leg1_reviews) + " · " + str(relay.leg1_min) + " min to the handoff"}</small>
+                </div>
+            </li>
+            {if h is not None {
+                <li key="handoff" className="relay-handoff">
+                    <span className="handoff-dot"><Icon name="pin" size={16} /></span>
+                    <div>
+                        <strong>{"Suggested stop: " + (h.name or "a public spot") + " · " + fmt_time(relay.handoff_time)}</strong>
+                        <small>{(h.kind + " · " if h.kind else "") + (f"★ {h.rating:.1f} ({h.reviews})" if h.reviews else "") + (" · " + h.address if h.address else "")}</small>
+                        {h.reason and <p className="handoff-reason">{h.reason}</p>}
+                        {maps_url and <a href={maps_url} target="_blank" rel="noreferrer" onClick={lambda (e: MouseEvent) { e.stopPropagation(); }}>Open in Google Maps ↗</a>}
+                    </div>
+                </li>
+            }}
+            <li>
+                <span className="avatar avatar-small">{initials(relay.leg2_handle)}</span>
+                <div>
+                    <strong>{relay.leg2_handle + " continues · leaves " + fmt_time(relay.leg2_depart)}</strong>
+                    <small>{_rep(relay.leg2_rating, relay.leg2_reviews) + " · " + str(relay.leg2_min) + " min to your stop"}</small>
+                </div>
+            </li>
+        </ol>
+        {error and <p className="form-error">{error}</p>}
+        <div className="card-actions">
+            <button className="btn btn-secondary" onClick={msg1}>{"Ask " + relay.leg1_handle}</button>
+            <button className="btn btn-secondary" onClick={msg2}>{"Ask " + relay.leg2_handle}</button>
+            <button className="btn btn-primary" disabled={booking} onClick={lambda (e: MouseEvent) { e.stopPropagation(); book(); }}>
+                {"Booking…" if booking else "Book both rides"} <Icon name="arrow" />
+            </button>
+        </div>
+    </article>;
+}
+
+def _rep(rating: float, reviews: int) -> str {
+    return f"★ {rating:.1f} ({reviews})" if reviews > 0 else "New to Along";
+}
+
+# What posting means for each journey type.
+glob POST_COPY: dict[str, list[str]] = {
+    "ride": ["Post my ride request", "ride request", "Drivers heading your way will see it"],
+    "buddy": ["Post my ride offer", "ride offer", "Riders on your route will see it"],
+    "rental": ["Post my rental plan", "rental plan", "People renting for a similar trip will see it"],
+    "cab": ["Post my cab share", "cab share", "Travelers heading your way will see it"]
+};
+
+# Publish this search so future travelers can find it (and you get notified).
+#   empty=True: nothing matched — posting is the main next step.
+#   empty=False: results exist — a quiet "post it anyway" bar above them.
+def:pub PostPanel(
+    kind: str, posted: bool, posting: bool, notified: int, empty: bool,
+    onPost: Callable[[], None], onEdit: Callable[[], None], onProfile: Callable[[], None]
+) -> JsxElement {
+    copy = POST_COPY.get(kind, POST_COPY["ride"]);
+    if posted {
+        told = f" We let {notified} {'person' if notified == 1 else 'people'} who fit know." if notified > 0 else "";
+        return <div className={"post-panel done" + (" big" if empty else "")} role="status">
+            <span className="post-icon"><Icon name="check" size={18} /></span>
+            <div>
+                <strong>{"Your " + copy[1] + " is posted"}</strong>
+                <small>{copy[2] + " — we’ll notify you when someone fits." + told}</small>
+            </div>
+            <button className="link-button" onClick={lambda (e: MouseEvent) { onProfile(); }}>Manage</button>
+        </div>;
+    }
+    if empty {
+        return <div className="post-panel big">
+            <span className="post-icon"><Icon name="bell" size={20} /></span>
+            <div>
+                <strong>No one on this route yet</strong>
+                <small>{"Post your " + copy[1] + ". " + copy[2] + ", and we’ll notify you the moment someone fits."}</small>
+                <div className="post-actions">
+                    <button className="btn btn-primary" disabled={posting} onClick={lambda (e: MouseEvent) { onPost(); }}>
+                        {"Posting…" if posting else copy[0]} <Icon name="arrow" />
+                    </button>
+                    <button className="btn btn-secondary" onClick={lambda (e: MouseEvent) { onEdit(); }}>Edit search</button>
+                </div>
+            </div>
+        </div>;
+    }
+    return <div className="post-panel">
+        <span className="post-icon"><Icon name="bell" size={16} /></span>
+        <div>
+            <strong>Want more options?</strong>
+            <small>{"Post your " + copy[1] + " — we’ll notify you when new people fit."}</small>
+        </div>
+        <button className="btn btn-secondary" disabled={posting} onClick={lambda (e: MouseEvent) { onPost(); }}>{"Posting…" if posting else "Post it"}</button>
+    </div>;
 }

@@ -5,9 +5,14 @@ import from "@jac/runtime" { useNavigate, useParams }
 import from .Icon { Icon }
 import from .AppHeader { AppHeader }
 import from ...lib.along { initials, fmt_date }
-sv import from ...services.along { get_match_details, get_conversation, rate_match, MatchDetailView, ConversationView }
+sv import from ...services.along { get_match_details, get_conversation, rate_match, get_my_rating, MatchDetailView, ConversationView, GivenRatingView }
 
-glob STAR_LABELS: list[str] = ["Tap a star to rate", "Not great", "Could be better", "Good", "Great", "Excellent"];
+glob STAR_LABELS: list[str] = ["Tap a star to rate", "Not great", "Could be better", "Good", "Great", "Excellent"],
+     # Must match REVIEW_TAGS on the server (unknown tags are dropped there).
+     REVIEW_TAGS: list[str] = [
+         "On time", "Friendly", "Safe driving", "Clean car", "Great communication",
+         "Flexible", "Respectful", "Easy pickup"
+     ];
 
 def:pub RatingView() -> JsxElement {
     params = useParams();
@@ -17,7 +22,9 @@ def:pub RatingView() -> JsxElement {
         convo: ConversationView | None = None,
         stars: int = 0,
         comment: str = "",
+        tags: list[str] = [],
         loading: bool = True,
+        editing: bool = False,
         submitting: bool = False,
         error: str = "";
 
@@ -27,6 +34,13 @@ def:pub RatingView() -> JsxElement {
         if match_id {
             detail = await get_match_details(match_id);
             convo = await get_conversation(match_id);
+            given: GivenRatingView | None = await get_my_rating(match_id);
+            if given is not None {
+                stars = given.stars;
+                comment = given.comment;
+                tags = given.tags;
+                editing = True;
+            }
         }
         loading = False;
     }
@@ -38,13 +52,17 @@ def:pub RatingView() -> JsxElement {
         }
         submitting = True;
         error = "";
-        ok = await rate_match(match_id, stars, comment);
+        ok = await rate_match(match_id, stars, comment, tags);
         submitting = False;
         if ok {
-            nav("/profile");
+            nav("/profile" if editing else "/people/" + match_id);
         } else {
-            error = "This journey was already rated.";
+            error = "Couldn’t save your rating. Please try again.";
         }
+    }
+
+    def toggle_tag(t: str) {
+        tags = [x for x in tags if x != t] if t in tags else tags + [t];
     }
 
     card = detail.card if detail is not None else None;
@@ -58,7 +76,7 @@ def:pub RatingView() -> JsxElement {
     if card is not None and card.my_trip is not None {
         when = "Weekday commute" if card.my_trip.recurring else fmt_date(card.my_trip.travel_date);
     }
-    already = convo is not None and convo.i_rated;
+    already = convo is not None and convo.i_rated and not editing;
 
     return <div className="app-shell">
         <AppHeader progress={True} />
@@ -72,9 +90,9 @@ def:pub RatingView() -> JsxElement {
                         <button className="btn btn-primary" onClick={lambda (e: MouseEvent) { nav("/matches"); }}>Back to matches</button>
                     </div>
                 } else {
-                    <span key="icon" className="success-icon"><Icon name="check" size={28} /></span>
-                    <span key="kicker" className="step-kicker">Journey complete</span>
-                    <h1 key="h">{"Thanks for your feedback" if already else "How was your journey?"}</h1>
+                    <span key="icon" className="success-icon"><Icon name={"star" if editing else "check"} size={28} /></span>
+                    <span key="kicker" className="step-kicker">{"Your rating" if editing else "Journey complete"}</span>
+                    <h1 key="h">{"Edit your rating" if editing else ("Thanks for your feedback" if already else "How was your journey?")}</h1>
                     <p key="p">Your anonymous feedback helps the Along community travel with confidence.</p>
                     <div key="person" className="rate-person">
                         <span className="avatar avatar-large">{initials(other_name)}</span>
@@ -91,9 +109,23 @@ def:pub RatingView() -> JsxElement {
                             }}
                         </div>
                         <small key="label" className="rating-label">{STAR_LABELS[stars]}</small>
+                        <div key="tags" className="tag-picker">
+                            <span>What went well? <em>Optional</em></span>
+                            <div>
+                                {for t in REVIEW_TAGS {
+                                    <button
+                                        key={t} type="button" aria-pressed={t in tags}
+                                        className={"tag-chip" + (" on" if t in tags else "")}
+                                        onClick={lambda (e: MouseEvent) { toggle_tag(t); }}
+                                    >
+                                        {t in tags and <Icon name="check" size={13} />} {t}
+                                    </button>
+                                }}
+                            </div>
+                        </div>
                         <label key="comment" className="comment-field">
                             <span>Anything else? <em>Optional</em></span>
-                            <textarea value={comment} onChange={lambda (e: ChangeEvent) { comment = e.target.value; }} placeholder="Share helpful, respectful feedback…" />
+                            <textarea value={comment} maxLength={500} onChange={lambda (e: ChangeEvent) { comment = e.target.value; }} placeholder="Share helpful, respectful feedback…" />
                         </label>
                         <div key="anon" className="anonymous-note">
                             <Icon name="lock" />
@@ -103,9 +135,9 @@ def:pub RatingView() -> JsxElement {
                             <p key="err" className="form-error">{error}</p>
                         }
                         <button key="submit" className="btn btn-primary full-button" onClick={submit} disabled={submitting}>
-                            {"Submitting…" if submitting else "Submit feedback"} <Icon name="arrow" />
+                            {"Saving…" if submitting else ("Save changes" if editing else "Submit feedback")} <Icon name="arrow" />
                         </button>
-                        <button key="skip" className="skip-link" onClick={lambda (e: MouseEvent) { nav("/profile"); }}>Skip for now</button>
+                        <button key="skip" className="skip-link" onClick={lambda (e: MouseEvent) { nav("/profile"); }}>{"Cancel" if editing else "Skip for now"}</button>
                     }
                 }}
             </div>

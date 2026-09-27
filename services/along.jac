@@ -38,7 +38,9 @@ node User {
         identity_reveal_allowed: bool = False,
         trust_score: int = 80,
         handle_number: int = 0,
-        member_since: str = "";
+        member_since: str = "",
+        age: int = 0,                         # optional; only used to honour match preferences
+        gender: str = "";                     # optional: woman | man | non-binary | ""
 }
 
 node Trip {
@@ -78,7 +80,20 @@ node Trip {
         demo_rating: float = 0.0,             # seeded reputation for demo users only
         demo_reviews: int = 0,
         route_json: str = "",                 # cached Google road route, see get_trip_route
-        round_trip: bool = False;
+        round_trip: bool = False,
+        return_date: str = "",                # rentals: when the car goes back
+        space_needed: str = "",               # rentals when moving: how much cargo space
+        needs_driver: bool = False,           # rentals: "I don't drive — someone else should"
+        posted: bool = False,                 # searches are private until the owner posts them
+        matchmaker_done: bool = False,        # have others been told about this journey yet?
+        # Who this traveler is happy to travel with (all journey types).
+        age_min: int = 1,
+        age_max: int = 100,                   # 100 means "100+"
+        gender_prefs: list[str] = [],         # empty = anyone
+        # Snapshot of the poster's own age/gender, used ONLY by the matcher to
+        # honour other people's preferences. Never sent to any client.
+        owner_age: int = 0,
+        owner_gender: str = "";
 }
 
 node Location {
@@ -122,7 +137,24 @@ node Match {
         mode: str = "ride",
         pickup_gap_miles: float = -1.0,
         rider_rated: bool = False,
-        driver_rated: bool = False;
+        driver_rated: bool = False,
+        agent_notes: dict[str, str] = {},   # each matching agent's one-line finding
+        # Set when this match is one leg of a booked 2-ride trip. Only THIS
+        # driver's part is stored here — never who drives the other leg.
+        relay_plan_id: str = "", relay_leg: str = "",      # first | second
+        relay_status: str = "",                              # pending | accepted | declined | replaced | cancelled
+        relay_stop: str = "", relay_time: str = "";
+}
+
+# A booked 2-ride trip. Owned by the rider and never shared with either
+# driver: each driver only sees their own leg (on their Match).
+node RelayPlan {
+    has rider_root: str = "", rider_trip_id: str = "",
+        leg1_match_id: str = "", leg2_match_id: str = "",
+        handoff_name: str = "", handoff_address: str = "", handoff_lat: float = 0.0, handoff_lng: float = 0.0,
+        handoff_time: str = "", pickup_time: str = "", wait_min: int = 0, arrive_time: str = "",
+        status: str = "active",                              # active | cancelled
+        created_at: str = "";
 }
 
 node Conversation {
@@ -146,7 +178,56 @@ node Message {
 # Anonymous feedback. Stores who was rated (a root id, or "demo:<handle>"),
 # never who rated — only the aggregate is ever read back.
 node Rating {
-    has ratee_key: str = "", stars: int = 0, comment: str = "", created_at: str = "";
+    has ratee_key: str = "", stars: int = 0, comment: str = "", created_at: str = "",
+        tags: list[str] = [],        # quick compliments, e.g. "On time", "Friendly"
+        rated_on: str = "",          # "Sep 2026" — month only, to keep reviews anonymous
+        mode: str = "";              # journey type the review is about
+    # Lets the author edit their own rating. Never sent to any client.
+    has match_id: str = "", rater_root: str = "";
+}
+
+# One traveler blocking another. Keys are root ids ("demo:<handle>" for demo
+# travelers). Enforced both ways: neither sees nor can message the other.
+node Block {
+    has blocker_key: str = "", blocked_key: str = "", blocked_handle: str = "", created_at: str = "";
+}
+
+# A safety report for review by the Along team. Never shown to the reported person.
+node Report {
+    has reporter_root: str = "", reported_key: str = "", reported_handle: str = "",
+        match_id: str = "", reason: str = "", details: str = "", created_at: str = "",
+        status: str = "open";
+}
+
+# A read-only snapshot of a trip a traveler chose to share with a friend.
+# Public by token; holds only what the share page shows.
+node ShareLink {
+    has token: str = "", owner_root: str = "", created_at: str = "",
+        traveler: str = "", kind: str = "", route_from: str = "", route_to: str = "",
+        when: str = "", driver: str = "", driver_rating: str = "",
+        handoff: str = "", handoff_time: str = "", second_driver: str = "",
+        second_rating: str = "", arrive: str = "", revoked: bool = False;
+}
+
+# Public "email verified" badge for one traveler (key = root id). Carries no
+# personal data — only that the account's email address was confirmed.
+node VerifiedBadge {
+    has user_key: str = "", since: str = "";
+}
+
+# In-app notification for one recipient (new match, new message). Created by
+# whoever triggers it and shared with the recipient only.
+node Notification {
+    has recipient_root: str = "", kind: str = "",   # match | message
+        title: str = "", body: str = "", match_id: str = "", trip_id: str = "",
+        created_at: str = "", read: bool = False;
+}
+
+# What the Coordinator has learned from real choices: running totals of the
+# score components of matches it showed vs. the ones people connected with.
+node LearnedWeights {
+    has shown: int = 0, chosen: int = 0,
+        shown_sum: dict[str, float] = {}, chosen_sum: dict[str, float] = {};
 }
 
 node ImpactRecord {
@@ -189,7 +270,20 @@ obj TripView {
         recurring: bool = True, smoking: bool = False,
         origin_lat: float = 0.0, origin_lng: float = 0.0,
         destination_lat: float = 0.0, destination_lng: float = 0.0,
-        owner_rating: float = 0.0, owner_reviews: int = 0, round_trip: bool = False;
+        owner_rating: float = 0.0, owner_reviews: int = 0, round_trip: bool = False,
+        return_date: str = "", space_needed: str = "", needs_driver: bool = False, posted: bool = False,
+        expired: bool = False,
+        age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = [];
+}
+
+# A place that rents cars near a pickup point (Google Places).
+obj RentalSpotView {
+    has name: str = "", address: str = "", lat: float = 0.0, lng: float = 0.0,
+        rating: float = 0.0, reviews: int = 0, km: float = 0.0, maps_url: str = "";
+}
+
+obj AgentNoteView {
+    has agent: str = "", note: str = "";
 }
 
 obj MatchCardView {
@@ -200,7 +294,8 @@ obj MatchCardView {
         # Caller-relative view: which trip is mine and which is the other person's.
         my_trip: TripView | None = None, other_trip: TripView | None = None,
         mode: str = "ride", fit_label: str = "", why: str = "",
-        other_handle: str = "", has_conversation: bool = False;
+        other_handle: str = "", has_conversation: bool = False,
+        agent_notes: list[AgentNoteView] = [], pickup_gap_miles: float = -1.0;
 }
 
 obj MatchDetailView {
@@ -231,7 +326,25 @@ obj ConversationView {
         messages: list[MessageView] = [],
         other_display_name: str = "", other_verified: bool = False,
         other_phone: str = "", match_status: str = "", mode: str = "ride",
-        i_rated: bool = False;
+        i_rated: bool = False,
+        # 2-ride trips: the rider sees plan_id; a driver sees only their own leg.
+        relay_plan_id: str = "", relay_leg: str = "", relay_status: str = "",
+        relay_stop: str = "", relay_time: str = "", i_am_driver_of_leg: bool = False;
+}
+
+obj RelayLegView {
+    has match_id: str = "", leg: str = "", handle: str = "", rating: str = "",
+        status: str = "", depart: str = "", arrive: str = "";
+}
+
+# The rider's view of a booked 2-ride trip, with options if a leg fell through.
+obj RelayPlanView {
+    has id: str = "", status: str = "", needs_attention: bool = False,
+        route_from: str = "", route_to: str = "",
+        handoff_name: str = "", handoff_address: str = "", handoff_lat: float = 0.0, handoff_lng: float = 0.0,
+        handoff_time: str = "", pickup_time: str = "", wait_min: int = 0, arrive_time: str = "",
+        legs: list[RelayLegView] = [], alternatives: list[RelayView] = [],
+        direct_options: list[MatchCardView] = [];
 }
 
 # Browser-side Google Maps settings. The key is a browser key (restrict it by
@@ -252,17 +365,164 @@ obj ConversationSummaryView {
         match_status: str = "", mode: str = "ride";
 }
 
+# One anonymous review as shown on a profile — never who wrote it.
+obj ReviewView {
+    has stars: int = 0, comment: str = "", tags: list[str] = [], rated_on: str = "", mode: str = "";
+}
+
+# Another traveler's public profile, seen through a match you share with them.
+# Name, area and verification appear only after a mutual identity reveal.
+obj TravelerProfileView {
+    has match_id: str = "", handle: str = "", revealed: bool = False,
+        display_name: str = "", home_region: str = "", verified: bool = False,
+        member_since: str = "", rating: float = 0.0, review_count: int = 0,
+        is_new: bool = True, top_tags: list[str] = [], reviews: list[ReviewView] = [],
+        journeys_posted: int = 0, journey_types: list[str] = [], is_demo: bool = False,
+        can_review: bool = False, already_reviewed: bool = False,
+        email_verified: bool = False;
+}
+
 obj ProfileView {
     has display_name: str = "", home_region: str = "", rider_handle: str = "",
         driver_handle: str = "", verified: bool = False,
         phone: str = "", member_since: str = "", has_ratings: bool = False,
-        completed_connections: int = 0;
+        completed_connections: int = 0, age: int = 0, gender: str = "";
 }
 
 obj ImpactView {
     has journeys_matched: int = 0, estimated_rider_savings: float = 0.0,
         empty_seats_activated: int = 0, shared_miles: float = 0.0,
         communities_connected: int = 0, cities: list[str] = [];
+}
+
+# ---------------------------------------------------------------------------
+# Matching agents — five walkers that each do one job on the journey graph.
+# They pass one shared list of Candidates along; the Coordinator turns the
+# survivors into Match nodes. Every score stays deterministic.
+# ---------------------------------------------------------------------------
+
+obj Candidate {
+    has trip_id: str = "", handle: str = "", owner_root: str = "",
+        route_score: int = 0, detour: int = 0, origin_gap_km: float = 0.0, dest_gap_km: float = 0.0,
+        time_score: int = 0, time_gap_min: int = 0, time_delta: int = 0,
+        preference_score: int = 0, trust_bonus: int = 0, rating: float = 0.0, reviews: int = 0,
+        cost_score: int = 0, rider_savings: float = 0.0, driver_contribution: float = 0.0,
+        overall: int = 0, notes: dict[str, str] = {};
+}
+
+# A journey drafted from plain English by the trip assistant. The user always
+# reviews it on the normal form before anything is posted.
+# A rating I gave, for "People you've rated" on my profile.
+obj GivenRatingView {
+    has match_id: str = "", handle: str = "", stars: int = 0, comment: str = "",
+        tags: list[str] = [], mode: str = "", route: str = "", rated_on: str = "",
+        blocked: bool = False;
+}
+
+obj TripDraftView {
+    has ok: bool = False, source: str = "",        # gemini | rules
+        kind: str = "ride",                         # ride | buddy | rental | cab
+        origin_name: str = "", destination_name: str = "",
+        origin_lat: float = 0.0, origin_lng: float = 0.0,
+        destination_lat: float = 0.0, destination_lng: float = 0.0,
+        time: str = "", time_preference: str = "arrive_by",
+        recurring: bool = False, travel_date: str = "", round_trip: bool = False,
+        seats: int = 0, people: int = 1, vehicle: str = "", moving_help: bool = False,
+        needs_driver: bool = False, gender_prefs: list[str] = [], age_min: int = 1, age_max: int = 100,
+        summary: str = "", missing: list[str] = [];
+}
+
+obj SharedTripView {
+    has traveler: str = "", kind: str = "", route_from: str = "", route_to: str = "",
+        when: str = "", driver: str = "", driver_rating: str = "",
+        handoff: str = "", handoff_time: str = "", second_driver: str = "",
+        second_rating: str = "", arrive: str = "", created_at: str = "";
+}
+
+obj EmailStatusView {
+    has email: str = "", verified: bool = False;
+}
+
+obj BlockedView {
+    has key: str = "", handle: str = "", since: str = "";
+}
+
+obj NotificationView {
+    has id: str = "", kind: str = "", title: str = "", body: str = "",
+        match_id: str = "", trip_id: str = "", created_at: str = "", read: bool = False;
+}
+
+obj AgentStepView {
+    has agent: str = "", role: str = "", summary: str = "", looked_at: int = 0, kept: int = 0;
+}
+
+# Where a relay's two rides meet: a real public place near the point where
+# both drivers' routes come closest, picked by Gemini (or rules as fallback).
+obj HandoffView {
+    has name: str = "", address: str = "", lat: float = 0.0, lng: float = 0.0,
+        kind: str = "", rating: float = 0.0, reviews: int = 0, open_now: str = "",
+        reason: str = "", source: str = "";
+}
+
+# A 2-ride route: driver A takes you to the handoff, driver B takes you on.
+obj RelayView {
+    has id: str = "", leg1_match_id: str = "", leg2_match_id: str = "",
+        leg1_handle: str = "", leg2_handle: str = "",
+        leg1_rating: float = 0.0, leg1_reviews: int = 0,
+        leg2_rating: float = 0.0, leg2_reviews: int = 0,
+        pickup_time: str = "", handoff_time: str = "", wait_min: int = 0,
+        leg2_depart: str = "", arrive_time: str = "", total_min: int = 0,
+        leg1_min: int = 0, leg2_min: int = 0, pickup_gap_mi: float = 0.0,
+        score: int = 0, why: str = "", handoff: HandoffView | None = None,
+        leg1_points: list[list[float]] = [], leg2_points: list[list[float]] = [];
+}
+
+obj AgentRunView {
+    has cards: list[MatchCardView] = [], steps: list[AgentStepView] = [],
+        relays: list[RelayView] = [];
+}
+
+# Walks every journey hanging off the shared root; keeps the ones whose
+# role/mode fit and scores how much of the corridor they share.
+walker RouteScout {
+    has origin_id: str = "", my_root: str = "", scanned: int = 0,
+        blocked: list[str] = [],          # travelers hidden by a block (either way)
+        candidates: list[Candidate] = [];
+    can start with Root entry;
+    can inspect with Trip entry;
+}
+
+# The other three specialists visit just the Route Scout's shortlist.
+walker ScheduleAgent {
+    has origin_id: str = "", candidates: list[Candidate] = [];
+    can start with Root entry;
+    can inspect with Trip entry;
+}
+
+walker TrustAgent {
+    has origin_id: str = "", candidates: list[Candidate] = [];
+    can start with Root entry;
+    can inspect with Trip entry;
+}
+
+walker CostAgent {
+    has origin_id: str = "", candidates: list[Candidate] = [];
+    can start with Root entry;
+    can inspect with Trip entry;
+}
+
+# Runs whenever someone posts a journey: sends the agent team out from the
+# new journey and notifies every existing traveler it's a good fit for.
+walker Matchmaker {
+    has trip_id: str = "", notified: int = 0;
+    can watch with Root entry;
+}
+
+# Weighs every specialist's score, ranks, and writes/updates the Match nodes.
+walker Coordinator {
+    has origin_id: str = "", my_root: str = "", candidates: list[Candidate] = [],
+        cards: list[MatchCardView] = [];
+    can decide with Root entry;
 }
 
 # ---------------------------------------------------------------------------
@@ -286,6 +546,9 @@ def create_trip(
 ) -> str;
 
 def run_matching(trip_id: str) -> list[MatchCardView];
+
+# Same as run_matching, plus each agent's report for the "how we searched" view.
+def run_agents(trip_id: str) -> AgentRunView;
 
 def get_match_results() -> list[MatchCardView];
 
@@ -316,12 +579,28 @@ def create_journey(
     # Exact coordinates from the Google Places dropdown; 0 = look the name up.
     origin_lat: float = 0.0, origin_lng: float = 0.0,
     destination_lat: float = 0.0, destination_lng: float = 0.0,
-    round_trip: bool = False
+    round_trip: bool = False, return_date: str = "", space_needed: str = "",
+    age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = [], needs_driver: bool = False
 ) -> str;
+
+# Car-rental counters near a point, nearest first (needs a Google Maps key).
+def get_rental_spots(lat: float, lng: float) -> list[RentalSpotView];
 
 def get_my_trip(trip_id: str) -> TripView | None;
 
 def get_my_trips() -> list[TripView];
+
+# Publish a journey so others can find it; people it fits are notified, and
+# anyone who posts a fitting journey later notifies me. Returns how many
+# people were told.
+def post_journey(trip_id: str) -> int;
+
+# Same journey, other way to go: "ride" (with a driver) <-> "cab" (split a
+# cab). Makes a private copy in the other mode and returns its id.
+def switch_journey(trip_id: str, mode: str) -> str;
+
+# Take one of my journeys down: it stops matching and its open suggestions close.
+def remove_journey(trip_id: str) -> bool;
 
 def get_my_conversations() -> list[ConversationSummaryView];
 
@@ -329,9 +608,70 @@ def close_match(match_id: str) -> bool;
 
 def complete_match(match_id: str) -> bool;
 
-def rate_match(match_id: str, stars: int, comment: str) -> bool;
+def rate_match(match_id: str, stars: int, comment: str, tags: list[str] = []) -> bool;
 
-def update_profile_details(display_name: str, home_region: str, phone: str) -> ProfileView;
+# Ratings I've given (newest first), and one of them for editing.
+def get_my_ratings() -> list[GivenRatingView];
+
+def get_my_rating(match_id: str) -> GivenRatingView | None;
+
+def get_traveler_profile(match_id: str) -> TravelerProfileView | None;
+
+# --- Trip assistant: plain English -> journey draft (Gemini, with a rules fallback) ---
+
+def plan_trip(text: str) -> TripDraftView;
+
+# --- Email verification (the verify/reset flows themselves are jac-scale's
+#     /user/send-verification, /user/verify-identity, /user/forgot-password,
+#     /user/reset-password endpoints) ---
+
+def get_email_status() -> EmailStatusView;
+
+# --- Safety: block and report ---
+
+def block_user(match_id: str) -> bool;
+
+def unblock_user(key: str) -> bool;
+
+def get_blocked() -> list[BlockedView];
+
+# reason: unsafe | harassment | spam | no_show | other
+def report_user(match_id: str, reason: str, details: str, also_block: bool) -> bool;
+
+# --- 2-ride trips: book both legs as one plan ---
+
+def book_relay(
+    leg1_match_id: str, leg2_match_id: str, handoff_name: str, handoff_address: str,
+    handoff_lat: float, handoff_lng: float, handoff_time: str, pickup_time: str,
+    wait_min: int, arrive_time: str
+) -> str;
+
+def get_relay_plan(plan_id: str) -> RelayPlanView | None;
+
+def get_my_relay_plans() -> list[RelayPlanView];
+
+# Driver side: accept or turn down your leg (the rider then gets options).
+def respond_relay_leg(match_id: str, accept: bool) -> bool;
+
+# Rider side: swap in another driver from the options, or cancel the whole trip.
+def replace_relay_leg(plan_id: str, leg: str, new_match_id: str, handoff_name: str, handoff_address: str,
+    handoff_lat: float, handoff_lng: float, handoff_time: str, arrive_time: str, wait_min: int) -> bool;
+
+def cancel_relay(plan_id: str) -> bool;
+
+# --- Share my trip (safety): a public, read-only link for a friend ---
+
+def create_share_link(match_id: str) -> str;
+
+def:pub get_shared_trip(token: str) -> SharedTripView | None;
+
+# --- Notifications (the Matchmaker and chat create them) ---
+
+def get_my_notifications() -> list[NotificationView];
+
+def mark_notifications_read(ids: list[str]) -> int;
+
+def update_profile_details(display_name: str, home_region: str, phone: str, age: int = 0, gender: str = "") -> ProfileView;
 
 # --- Google Maps ---
 
