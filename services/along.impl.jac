@@ -899,6 +899,11 @@ impl Coordinator.decide {
 }
 
 impl run_agents(trip_id: str) -> AgentRunView {
+    return _run_agents(trip_id, True);
+}
+
+# with_relays: also look for 2-ride routes (slower: needs road routes + places).
+def _run_agents(trip_id: str, with_relays: bool) -> AgentRunView {
     origin = _load_trip(trip_id);
     me = _my_root_id();
     if origin is None or (origin as Trip).owner_root != me {
@@ -940,11 +945,22 @@ impl run_agents(trip_id: str) -> AgentRunView {
             looked_at=k, kept=len(cards),
             summary=(f"Ranked {len(cards)} matches; the best is {cards[0].overall_score}%") if len(cards) else "No matches to rank yet"),
     ];
-    return AgentRunView(cards=cards, steps=steps);
+    relays: list[RelayView] = [];
+    o = origin as Trip;
+    if with_relays and o.mode == "ride" and o.role == "RIDER" {
+        relays = _find_relays(o, cards);
+        steps = steps + [AgentStepView(
+            agent="Relay Agent", role="Pairs two drivers with a safe handoff when no one goes the whole way",
+            looked_at=len([c for c in cards if c.other_trip is not None]), kept=len(relays),
+            summary=(f"Found {len(relays)} 2-ride route{'s' if len(relays) != 1 else ''}; handoff picked by " + (relays[0].handoff.source if relays[0].handoff is not None else "rules"))
+                if len(relays) else "No 2-ride route beats waiting for a direct ride"
+        )];
+    }
+    return AgentRunView(cards=cards, steps=steps, relays=relays);
 }
 
 impl run_matching(trip_id: str) -> list[MatchCardView] {
-    return run_agents(trip_id).cards;
+    return _run_agents(trip_id, False).cards;
 }
 
 impl get_match_results() -> list[MatchCardView] {
@@ -1495,7 +1511,7 @@ impl Matchmaker.watch {
         skip;
     }
     p = posted as Trip;
-    run = run_agents(self.trip_id);
+    run = _run_agents(self.trip_id, False);
     route = p.origin_name.split(",")[0] + " → " + p.destination_name.split(",")[0];
     for card in run.cards[:NOTIFY_MAX_PER_POST] {
         other = card.other_trip;
@@ -1778,4 +1794,327 @@ impl plan_trip(text: str) -> TripDraftView {
         draft.summary = "Got it: " + where + ".";
     }
     return draft;
+}
+
+# ---------------------------------------------------------------------------
+# Relay Agent — 2-ride routes with an AI-picked handoff spot
+#
+# Driver A's road route passes your pickup; driver B's reaches your
+# destination. Where their routes come closest is the handoff point; Google
+# Places lists real public places there, and Gemini picks the best + safest
+# one for all three people (rules if Gemini is unavailable).
+# ---------------------------------------------------------------------------
+
+glob RELAY_NEAR_KM: float = 9.0,        # pickup/dropoff this close to a driver's route (town centre to highway is often 5-8 km)
+     RELAY_MEET_KM: float = 4.0,        # the two routes must pass this close to each other
+     RELAY_MIN_WAIT: int = 3,
+     RELAY_MAX_WAIT: int = 45,
+     RELAY_MAX_RESULTS: int = 2;
+
+glob HANDOFF_TYPES: list[str] = [
+    "cafe", "coffee_shop", "library", "shopping_mall", "supermarket", "gas_station",
+    "transit_station", "bus_station", "park_and_ride", "restaurant", "fast_food_restaurant"
+];
+
+def _thin(points: list[list[float]], n: int) -> list[list[float]] {
+    if len(points) <= n {
+        return points;
+    }
+    step = len(points) / n;
+    out = [points[int(i * step)] for i in range(n)];
+    return out + [points[-1]];
+}
+
+def _cum_km(points: list[list[float]]) -> list[float] {
+    out: list[float] = [0.0];
+    for i in range(1, len(points)) {
+        out.append(out[-1] + _haversine_km(points[i - 1][0], points[i - 1][1], points[i][0], points[i][1]));
+    }
+    return out;
+}
+
+# (index of the closest route point, distance in km)
+def _nearest_on(points: list[list[float]], lat: float, lng: float) -> tuple[int, float] {
+    best = 0;
+    best_km = 1e9;
+    for (i, p) in enumerate(points) {
+        d = _haversine_km(p[0], p[1], lat, lng);
+        if d < best_km {
+            best_km = d;
+            best = i;
+        }
+    }
+    return (best, best_km);
+}
+
+def _hhmm(minutes: float) -> str {
+    total = int(round(minutes)) % (24 * 60);
+    return f"{total // 60:02d}:{total % 60:02d}";
+}
+
+def _route_of(t: Trip) -> RouteView {
+    return get_trip_route(jid(t));
+}
+
+def _find_relays(o: Trip, cards: list[MatchCardView]) -> list[RelayView] {
+    drivers: list[tuple[Trip, str]] = [];
+    for c in cards {
+        if c.other_trip is not None and c.other_trip.role == "DRIVER" {
+            t = _load_trip(c.other_trip.id);
+            if t is not None {
+                drivers.append((t as Trip, c.id));
+            }
+        }
+    }
+    if len(drivers) < 2 {
+        return [];
+    }
+    routes: dict[str, list[list[float]]] = {};
+    for (t, mid) in drivers {
+        routes[jid(t)] = _thin(_route_of(t).points, 80);
+    }
+    # Leg 1 candidates pass your pickup; leg 2 candidates pass your destination.
+    firsts: list[dict] = [];
+    seconds: list[dict] = [];
+    for (t, mid) in drivers {
+        pts = routes[jid(t)];
+        if len(pts) < 2 {
+            continue;
+        }
+        pick = _nearest_on(pts, o.origin_lat, o.origin_lng);
+        drop = _nearest_on(pts, o.destination_lat, o.destination_lng);
+        if pick[1] <= RELAY_NEAR_KM and pick[0] < len(pts) - 1 {
+            firsts.append({"trip": t, "match": mid, "pts": pts, "pick": pick[0], "gap": pick[1]});
+        }
+        if drop[1] <= RELAY_NEAR_KM and drop[0] > 0 {
+            seconds.append({"trip": t, "match": mid, "pts": pts, "drop": drop[0], "gap": drop[1]});
+        }
+    }
+    deadline = _minutes_of_day(o.arrival_deadline) + max(o.flexible_minutes, 10) if o.time_preference == "arrive_by" and o.arrival_deadline else 99999;
+    found: list[RelayView] = [];
+    for f in firsts {
+        a = f["trip"] as Trip;
+        a_pts = f["pts"] as list[list[float]];
+        a_cum = _cum_km(a_pts);
+        a_route = _route_of(a);
+        for sec in seconds {
+            b = sec["trip"] as Trip;
+            if jid(a) == jid(b) {
+                continue;   # one driver going the whole way is a direct match, not a relay
+            }
+            b_pts = sec["pts"] as list[list[float]];
+            b_cum = _cum_km(b_pts);
+            b_route = _route_of(b);
+            # Closest approach: after A picks you up, before B drops you off.
+            best = (0, 0, 1e9);
+            for ia in range(f["pick"] as int, len(a_pts)) {
+                for ib in range(0, (sec["drop"] as int) + 1) {
+                    d = _haversine_km(a_pts[ia][0], a_pts[ia][1], b_pts[ib][0], b_pts[ib][1]);
+                    if d < best[2] {
+                        best = (ia, ib, d);
+                    }
+                }
+            }
+            if best[2] > RELAY_MEET_KM {
+                continue;
+            }
+            ia = best[0];
+            ib = best[1];
+            a_share = a_cum[ia] / a_cum[-1] if a_cum[-1] > 0 else 0.0;
+            a_pick_share = a_cum[f["pick"] as int] / a_cum[-1] if a_cum[-1] > 0 else 0.0;
+            b_share = b_cum[ib] / b_cum[-1] if b_cum[-1] > 0 else 0.0;
+            b_drop_share = b_cum[sec["drop"] as int] / b_cum[-1] if b_cum[-1] > 0 else 1.0;
+            a_dep = _minutes_of_day(a.departure_time);
+            b_dep = _minutes_of_day(b.departure_time);
+            pickup_at = a_dep + a_route.duration_min * a_pick_share;
+            at_handoff = a_dep + a_route.duration_min * a_share;
+            b_at_handoff = b_dep + b_route.duration_min * b_share;
+            wait_m = int(round(b_at_handoff - at_handoff));
+            arrive = b_dep + b_route.duration_min * b_drop_share;
+            if wait_m < RELAY_MIN_WAIT or wait_m > RELAY_MAX_WAIT or arrive > deadline {
+                continue;
+            }
+            total = int(round(arrive - pickup_at));
+            rep_a = _rating_summary(_ratee_key(a.owner_root, a.owner_handle), a.demo_rating, a.demo_reviews);
+            rep_b = _rating_summary(_ratee_key(b.owner_root, b.owner_handle), b.demo_rating, b.demo_reviews);
+            score = 96 - wait_m * 0.4 - (f["gap"] as float) * 2.5 - (sec["gap"] as float) * 2.0 - best[2] * 3.0;
+            score += 2 if rep_a[1] > 0 and rep_a[0] >= 4.5 else 0;
+            score += 2 if rep_b[1] > 0 and rep_b[0] >= 4.5 else 0;
+            meet_lat = (a_pts[ia][0] + b_pts[ib][0]) / 2;
+            meet_lng = (a_pts[ia][1] + b_pts[ib][1]) / 2;
+            found.append(RelayView(
+                id=jid(a) + ":" + jid(b), leg1_match_id=f["match"] as str, leg2_match_id=sec["match"] as str,
+                leg1_handle=a.owner_handle, leg2_handle=b.owner_handle,
+                leg1_rating=rep_a[0] as float, leg1_reviews=rep_a[1] as int,
+                leg2_rating=rep_b[0] as float, leg2_reviews=rep_b[1] as int,
+                pickup_time=_hhmm(pickup_at), handoff_time=_hhmm(at_handoff), wait_min=wait_m,
+                leg2_depart=_hhmm(b_at_handoff), arrive_time=_hhmm(arrive), total_min=total,
+                leg1_min=int(round(at_handoff - pickup_at)), leg2_min=int(round(arrive - b_at_handoff)),
+                pickup_gap_mi=float(f"{(f['gap'] as float) * 0.621371:.1f}"),
+                score=max(1, min(99, int(score))),
+                handoff=HandoffView(lat=meet_lat, lng=meet_lng),
+                leg1_points=a_pts[f["pick"] as int:ia + 1], leg2_points=b_pts[ib:(sec["drop"] as int) + 1]
+            ));
+        }
+    }
+    ranked = sorted(found, key=_relay_score, reverse=True)[:RELAY_MAX_RESULTS];
+    # Judge opening hours for the day the trip actually happens.
+    day = "a weekday (Monday to Friday)" if o.recurring else _weekday_of(o.travel_date);
+    for r in ranked {
+        h = r.handoff as HandoffView;
+        r.handoff = _pick_handoff(h.lat, h.lng, r.handoff_time, r.wait_min, r.leg1_handle, r.leg2_handle, day);
+        where = r.handoff.name if r.handoff is not None and r.handoff.name else "a public spot";
+        r.why = f"{r.leg1_handle} passes your pickup and meets {r.leg2_handle}'s route near {where}; you wait about {r.wait_min} min.";
+    }
+    return ranked;
+}
+
+def _weekday_of(iso: str) -> str {
+    try {
+        return datetime.date.fromisoformat(iso).strftime("%A");
+    } except Exception {
+        return datetime.date.today().strftime("%A");
+    }
+}
+
+def _relay_score(r: RelayView) -> int {
+    return r.score;
+}
+
+# Real public places near the meeting point (Places API, New).
+def _places_near(lat: float, lng: float) -> list[dict] {
+    key = _maps_key();
+    if not key {
+        return [];
+    }
+    body = {
+        "includedTypes": HANDOFF_TYPES, "maxResultCount": 10, "rankPreference": "DISTANCE",
+        "locationRestriction": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": 2500.0}}
+    };
+    headers = {
+        "Content-Type": "application/json", "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.location,places.primaryType,places.rating,places.userRatingCount,places.businessStatus,places.regularOpeningHours.weekdayDescriptions,places.currentOpeningHours.openNow"
+    };
+    result = _http_json("https://places.googleapis.com/v1/places:searchNearby", body, headers);
+    if result is None {
+        return [];
+    }
+    out: list[dict] = [];
+    for p in result.get("places", []) {
+        if p.get("businessStatus", "OPERATIONAL") != "OPERATIONAL" {
+            continue;
+        }
+        loc = p.get("location", {});
+        out.append({
+            "name": (p.get("displayName") or {}).get("text", ""), "address": p.get("formattedAddress", ""),
+            "lat": loc.get("latitude", lat), "lng": loc.get("longitude", lng),
+            "type": str(p.get("primaryType", "")).replace("_", " "),
+            "rating": p.get("rating", 0.0), "reviews": p.get("userRatingCount", 0),
+            "open_now": (p.get("currentOpeningHours") or {}).get("openNow"),
+            "hours": ((p.get("regularOpeningHours") or {}).get("weekdayDescriptions") or [])[:7],
+            "km_from_meeting_point": round(_haversine_km(lat, lng, loc.get("latitude", lat), loc.get("longitude", lng)), 2)
+        });
+    }
+    return out;
+}
+
+# Gemini chooses the best + safest handoff for everyone; rules if it can't.
+glob _HANDOFF_CACHE: dict[str, HandoffView] = {};
+
+def _pick_handoff(lat: float, lng: float, when: str, wait_m: int, first: str, second: str, day: str) -> HandoffView {
+    cache_key = f"{lat:.3f},{lng:.3f}|{day}|{when}";
+    if cache_key in _HANDOFF_CACHE {
+        return _HANDOFF_CACHE[cache_key];
+    }
+    picked = _choose_handoff(lat, lng, when, wait_m, first, second, day);
+    if picked.source != "none" {
+        _HANDOFF_CACHE[cache_key] = picked;
+    }
+    return picked;
+}
+
+def _choose_handoff(lat: float, lng: float, when: str, wait_m: int, first: str, second: str, day: str) -> HandoffView {
+    places = _places_near(lat, lng);
+    if len(places) == 0 {
+        return HandoffView(lat=lat, lng=lng, name="Meeting point", reason="No listed public places nearby — agree on a well-lit public spot in chat.", source="none");
+    }
+    choice = _gemini_pick_handoff(places, when, wait_m, first, second, day);
+    source = "gemini";
+    if choice is None {
+        choice = _rules_pick_handoff(places);
+        source = "rules";
+    }
+    idx = max(0, min(int(choice[0]), len(places) - 1));
+    p = places[idx];
+    return HandoffView(
+        name=p["name"], address=p["address"], lat=float(p["lat"]), lng=float(p["lng"]),
+        kind=str(p["type"]).capitalize(), rating=float(p["rating"] or 0.0), reviews=int(p["reviews"] or 0),
+        open_now="",   # "open right now" isn't meaningful for a future handoff
+        reason=str(choice[1])[:220], source=source
+    );
+}
+
+def _gemini_pick_handoff(places: list[dict], when: str, wait_m: int, first: str, second: str, day: str) -> tuple[int, str] | None {
+    key = _gemini_key();
+    if not key {
+        return None;
+    }
+    model = os.environ.get("GEMINI_MODEL", "").strip() or "gemini-flash-lite-latest";
+    brief = [
+        {k: p[k] for k in ["name", "type", "rating", "reviews", "hours", "km_from_meeting_point"]}
+        for p in places
+    ];
+    prompt = (
+        f"A rider is switching between two ride-share drivers ({first} drops off, {second} picks up) "
+        f"on {day} at about {when}, waiting roughly {wait_m} minutes. Use each place's opening hours "
+        "for that day. "
+        "Choose the single best and safest public handoff place from this list: busy, well-reviewed, "
+        "open at that time, with somewhere comfortable to wait, and close to the meeting point so both "
+        "drivers barely detour. Places:\n" + json.dumps(brief)
+    );
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0, "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "index": {"type": "INTEGER", "description": "0-based index into the list"},
+                    "reason": {"type": "STRING", "description": "One short sentence for the rider on why this spot is best and safe"}
+                },
+                "required": ["index", "reason"]
+            }
+        }
+    };
+    url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
+    result = _http_json(url, body, {"Content-Type": "application/json", "x-goog-api-key": key});
+    if result is None or not result.get("candidates") {
+        return None;
+    }
+    try {
+        picked = json.loads(result["candidates"][0]["content"]["parts"][0]["text"]);
+        return (int(picked["index"]), str(picked["reason"]));
+    } except Exception as e {
+        print(f"[relay] could not read Gemini handoff pick: {e}");
+        return None;
+    }
+}
+
+def _handoff_rule_score(p: dict) -> float {
+    kind_bonus = {"cafe": 3.0, "coffee shop": 3.0, "library": 3.0, "shopping mall": 2.5, "supermarket": 2.0,
+                  "transit station": 2.0, "bus station": 1.5, "park and ride": 2.0, "gas station": 1.0};
+    busy = math.log10(1 + float(p["reviews"] or 0));
+    open_bonus = 1.5 if len(p["hours"]) > 0 else 0.0;   # has published hours
+    return kind_bonus.get(str(p["type"]), 0.5) + float(p["rating"] or 0) * 0.6 + busy + open_bonus - float(p["km_from_meeting_point"]) * 1.5;
+}
+
+def _rules_pick_handoff(places: list[dict]) -> tuple[int, str] {
+    best = 0;
+    for i in range(len(places)) {
+        if _handoff_rule_score(places[i]) > _handoff_rule_score(places[best]) {
+            best = i;
+        }
+    }
+    p = places[best];
+    return (best, f"A busy, well-reviewed {p['type']} right by where both routes meet.");
 }

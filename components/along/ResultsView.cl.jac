@@ -12,9 +12,9 @@ import from .AppHeader { AppHeader }
 import from .MapCanvas { MapCanvas }
 import from ...lib.along {
     flow_info, flow_of_trip, short_place, initials, rating_text, has_rating,
-    when_text, meta_text, trip_timing
+    when_text, meta_text, trip_timing, fmt_time
 }
-sv import from ...services.along { run_agents, get_match_results, get_my_trip, TripView, MatchCardView, AgentRunView, AgentStepView }
+sv import from ...services.along { run_agents, get_match_results, get_my_trip, TripView, MatchCardView, AgentRunView, AgentStepView, RelayView }
 
 # Keyed on the URL so /results?tripId=… and /matches never share stale state.
 def:pub ResultsRoute() -> JsxElement {
@@ -40,6 +40,8 @@ def:pub ResultsView() -> JsxElement {
         phase: str = "searching" if trip_id else "ready",
         step: int = 0,
         agent_steps: list[AgentStepView] = [],
+        relays: list[RelayView] = [],
+        relay_id: str = "",
         report_open: bool = False,
         ticks: Ref[int] = Ref(0);
 
@@ -55,6 +57,7 @@ def:pub ResultsView() -> JsxElement {
                 run: AgentRunView = await run_agents(trip_id);
                 found = run.cards;
                 agent_steps = run.steps;
+                relays = run.relays;
                 # Let the search animation play for a beat even when matching is instant.
                 elapsed: float = new(Date).getTime() - started;
                 if elapsed < SEARCH_MIN_MS {
@@ -100,7 +103,12 @@ def:pub ResultsView() -> JsxElement {
     def open_details(match_id: str) { nav("/matches/" + match_id); }
     def open_chat(match_id: str) { nav("/chat/" + match_id); }
     def open_profile(match_id: str) { nav("/people/" + match_id); }
-    def pick(i: int) { selected = i; }
+    def pick(i: int) {
+        selected = i;
+        relay_id = "";
+    }
+    active_relays = [r for r in relays if r.id == relay_id];
+    active_relay: RelayView | None = active_relays[0] if len(active_relays) > 0 else None;
     def set_filter(score: int) {
         min_score = score;
         selected = 0;
@@ -184,6 +192,18 @@ def:pub ResultsView() -> JsxElement {
                         if len(agent_steps) > 0 {
                             <AgentReport key="report" steps={agent_steps} open={report_open} onToggle={lambda { report_open = not report_open; }} />
                         }
+                        if len(relays) > 0 and phase != "searching" {
+                            <div key="relays" className="relay-list">
+                                <p className="relay-intro"><Icon name="spark" size={14} /> No one drives the whole way — these 2-ride routes get you there on time.</p>
+                                {for r in relays {
+                                    <RelayCard
+                                        key={r.id} relay={r} selected={r.id == relay_id}
+                                        onSelect={lambda { relay_id = r.id; view = "map" if view == "map" else view; }}
+                                        onMessage={open_chat}
+                                    />
+                                }}
+                            </div>
+                        }
                         <div key="cards" className={"cards" + (" revealing" if phase == "revealing" else "")}>
                             {for (i, c) in enumerate(shown) {
                                 <ResultCard
@@ -197,7 +217,7 @@ def:pub ResultsView() -> JsxElement {
                     }}
                 </section>
                 <section className={"map-panel" + (" mobile-hidden-map" if view == "list" else "")}>
-                    <MapCanvas my_trip={route_trip} cards={shown} selected={sel} onSelect={pick} kind={kind} phase={phase} />
+                    <MapCanvas my_trip={route_trip} cards={shown} selected={sel} onSelect={pick} kind={kind} phase={phase} relay={active_relay} />
                 </section>
             </div>
         </main>
@@ -317,7 +337,8 @@ def:pub ResultCard(
 # What each agent did on this search — collapsed to one line by default.
 def:pub AgentReport(steps: list[AgentStepView], open: bool, onToggle: Callable[[], None]) -> JsxElement {
     scanned = steps[0].looked_at if len(steps) > 0 else 0;
-    ranked = steps[len(steps) - 1].kept if len(steps) > 0 else 0;
+    coordinator = [s for s in steps if s.agent == "Coordinator"];
+    ranked = coordinator[0].kept if len(coordinator) > 0 else 0;
     return <section className={"agent-report" + (" open" if open else "")}>
         <button className="agent-report-head" onClick={lambda (e: MouseEvent) { onToggle(); }} aria-expanded={open}>
             <span className="agent-stack">
@@ -346,4 +367,62 @@ def:pub AgentReport(steps: list[AgentStepView], open: bool, onToggle: Callable[[
             </ol>
         }}
     </section>;
+}
+
+# A 2-ride route: driver A -> AI-picked handoff spot -> driver B.
+def:pub RelayCard(relay: RelayView, selected: bool, onSelect: Callable[[], None], onMessage: Callable[[str], None]) -> JsxElement {
+    h = relay.handoff;
+    maps_url = ("https://www.google.com/maps/search/?api=1&query=" + str(h.lat) + "," + str(h.lng)) if h is not None else "";
+
+    def msg1(e: MouseEvent) {
+        e.stopPropagation();
+        onMessage(relay.leg1_match_id);
+    }
+    def msg2(e: MouseEvent) {
+        e.stopPropagation();
+        onMessage(relay.leg2_match_id);
+    }
+
+    return <article className={"relay-card" + (" selected" if selected else "")} onClick={lambda (e: MouseEvent) { onSelect(); }}>
+        <div className="relay-head">
+            <span className="relay-badge">2-ride route</span>
+            <strong>{"Arrive " + fmt_time(relay.arrive_time)}</strong>
+            <small>{str(relay.total_min) + " min door to door · " + str(relay.wait_min) + " min wait · " + str(relay.score) + "% match"}</small>
+        </div>
+        <ol className="relay-legs">
+            <li>
+                <span className="avatar avatar-small">{initials(relay.leg1_handle)}</span>
+                <div>
+                    <strong>{relay.leg1_handle + " picks you up · " + fmt_time(relay.pickup_time)}</strong>
+                    <small>{_rep(relay.leg1_rating, relay.leg1_reviews) + " · " + str(relay.leg1_min) + " min to the handoff"}</small>
+                </div>
+            </li>
+            {if h is not None {
+                <li key="handoff" className="relay-handoff">
+                    <span className="handoff-dot"><Icon name="pin" size={16} /></span>
+                    <div>
+                        <strong>{"Handoff at " + (h.name or "a public spot") + " · " + fmt_time(relay.handoff_time)}</strong>
+                        <small>{(h.kind + " · " if h.kind else "") + (f"★ {h.rating:.1f} ({h.reviews})" if h.reviews else "") + (" · " + h.address if h.address else "")}</small>
+                        {h.reason and <p className="handoff-reason"><span className="ai-chip">{"AI pick" if h.source == "gemini" else "Suggested"}</span>{h.reason}</p>}
+                        {maps_url and <a href={maps_url} target="_blank" rel="noreferrer" onClick={lambda (e: MouseEvent) { e.stopPropagation(); }}>Open in Google Maps ↗</a>}
+                    </div>
+                </li>
+            }}
+            <li>
+                <span className="avatar avatar-small">{initials(relay.leg2_handle)}</span>
+                <div>
+                    <strong>{relay.leg2_handle + " continues · leaves " + fmt_time(relay.leg2_depart)}</strong>
+                    <small>{_rep(relay.leg2_rating, relay.leg2_reviews) + " · " + str(relay.leg2_min) + " min to your stop"}</small>
+                </div>
+            </li>
+        </ol>
+        <div className="card-actions">
+            <button className="btn btn-secondary" onClick={msg1}>{"Message " + relay.leg1_handle}</button>
+            <button className="btn btn-primary" onClick={msg2}>{"Message " + relay.leg2_handle} <Icon name="chat" /></button>
+        </div>
+    </article>;
+}
+
+def _rep(rating: float, reviews: int) -> str {
+    return f"★ {rating:.1f} ({reviews})" if reviews > 0 else "New to Along";
 }

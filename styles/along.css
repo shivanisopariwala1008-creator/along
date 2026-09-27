@@ -622,3 +622,35 @@ button.avatar { cursor: pointer; }
   .assistant-box { flex-direction: column; align-items: stretch; padding: 10px; }
   .assistant-box .btn { width: 100%; }
 }
+
+/* ---------------------------------------------------------------------------
+   Relay (2-ride) routes
+   --------------------------------------------------------------------------- */
+.relay-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.relay-intro { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--al-green-dark); font-weight: 700; margin: 0; }
+.relay-card { border: 1px solid #cfe5a3; border-radius: 15px; padding: 16px; background: linear-gradient(160deg, #f6fbea, #ffffff 55%); cursor: pointer; transition: .2s; animation: card-in .5s cubic-bezier(.2,.8,.2,1) both; }
+.relay-card:hover, .relay-card.selected { border-color: var(--al-green); box-shadow: var(--al-shadow-small); }
+.relay-card.selected { border-width: 2px; padding: 15px; }
+.relay-head { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; align-items: center; margin-bottom: 12px; }
+.relay-head strong { font: 700 15px "Manrope"; }
+.relay-head small { grid-column: 1 / -1; color: var(--al-muted); font-size: 10px; margin-top: 4px; }
+.relay-badge { background: var(--al-lime); color: var(--al-green-dark); border-radius: 20px; padding: 4px 9px; font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.relay-legs { list-style: none; margin: 0 0 12px; padding: 0 0 0 4px; position: relative; display: flex; flex-direction: column; gap: 12px; }
+.relay-legs::before { content: ""; position: absolute; left: 20px; top: 20px; bottom: 20px; width: 2px; background: linear-gradient(var(--al-green), var(--al-blue)); opacity: .45; }
+.relay-legs li { display: flex; gap: 10px; align-items: flex-start; position: relative; }
+.relay-legs li > div { display: flex; flex-direction: column; min-width: 0; }
+.relay-legs strong { font-size: 12px; }
+.relay-legs small { color: var(--al-muted); font-size: 10px; margin-top: 2px; line-height: 1.4; }
+.relay-handoff { background: white; border: 1px dashed #b6d9c3; border-radius: 12px; padding: 10px; margin-left: -4px; }
+.handoff-dot { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--al-lime); color: var(--al-green-dark); flex: 0 0 auto; }
+.handoff-reason { font-size: 11px; line-height: 1.5; margin: 7px 0 0; color: var(--al-ink); }
+.ai-chip { display: inline-block; background: var(--al-green); color: white; border-radius: 6px; padding: 1px 6px; font-size: 9px; font-weight: 700; margin-right: 6px; vertical-align: 1px; }
+.relay-handoff a { color: var(--al-green); font-size: 10px; font-weight: 700; margin-top: 6px; }
+.relay-card .card-actions .btn { min-height: 35px; padding: 7px 11px; font-size: 10px; }
+.handoff-pin { display: inline-flex; align-items: center; gap: 5px; background: var(--al-lime); color: var(--al-green-dark); border: 2px solid white; border-radius: 20px; padding: 5px 10px 5px 7px; box-shadow: var(--al-shadow-small); font-size: 11px; white-space: nowrap; animation: marker-pop-flat .45s cubic-bezier(.2,1.6,.4,1) both; }
+.handoff-pin b { font-weight: 800; }
+@keyframes marker-pop-flat { from { transform: scale(0); } to { transform: scale(1); } }
+.leg-swatch { width: 16px; height: 4px; border-radius: 3px; background: var(--al-green); }
+.leg-swatch.blue { background: var(--al-blue); }
+.type-legend-you.first { margin-left: 0; padding-left: 0; border-left: 0; }
+.tiny-end.handoff { background: var(--al-lime); color: var(--al-green-dark); }

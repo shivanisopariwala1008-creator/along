@@ -6,11 +6,12 @@ projected from real trip coordinates but the roads and traffic are illustrative.
 import from .Icon { Icon }
 import from .GoogleMapView { GoogleMapView }
 import from ...lib.along { flow_info, map_bounds, project, pos_style, towns_in, fmt_time, when_text }
-sv import from ...services.along { get_maps_config, get_trip_route, TripView, MatchCardView, RouteView, MapsConfigView }
+sv import from ...services.along { get_maps_config, get_trip_route, TripView, MatchCardView, RouteView, MapsConfigView, RelayView }
 
 def:pub MapCanvas(
     my_trip: TripView | None, cards: list[MatchCardView], selected: int,
-    onSelect: Callable[[int], None], kind: str = "ride", phase: str = "ready"
+    onSelect: Callable[[int], None], kind: str = "ride", phase: str = "ready",
+    relay: RelayView | None = None
 ) -> JsxElement {
     has config: MapsConfigView | None = None,
         my_route: RouteView | None = None,
@@ -46,7 +47,7 @@ def:pub MapCanvas(
             <GoogleMapView
                 api_key={config.api_key} map_id={config.map_id} my_trip={my_trip}
                 my_route={my_route} other_route={other_route} cards={cards}
-                selected={selected} onSelect={onSelect} kind={kind} phase={phase}
+                selected={selected} onSelect={onSelect} kind={kind} phase={phase} relay={relay}
             />
         </div>;
     }

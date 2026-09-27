@@ -4,15 +4,17 @@ dashed on top, live traffic, and tappable match markers."""
 
 import from "@vis.gl/react-google-maps" { APIProvider, Map as GoogleMap, AdvancedMarker, useMap }
 import from react { useEffect }
+import from .Icon { Icon }
 import from ...lib.along { flow_info, when_text }
-sv import from ...services.along { TripView, MatchCardView, RouteView }
+sv import from ...services.along { TripView, MatchCardView, RouteView, RelayView }
 
 glob MICHIGAN_CENTER: dict[str, float] = {"lat": 42.6, "lng": -83.6};
 
 def:pub GoogleMapView(
     api_key: str, map_id: str, my_trip: TripView | None, my_route: RouteView | None,
     other_route: RouteView | None, cards: list[MatchCardView], selected: int,
-    onSelect: Callable[[int], None], kind: str = "ride", phase: str = "ready"
+    onSelect: Callable[[int], None], kind: str = "ride", phase: str = "ready",
+    relay: RelayView | None = None
 ) -> JsxElement {
     info = flow_info(kind);
     origin: list[float] = [my_trip.origin_lat, my_trip.origin_lng] if my_trip is not None else [];
@@ -27,11 +29,17 @@ def:pub GoogleMapView(
         # Dark ink so the route stands out against Google's green "clear" traffic.
         lines = lines + [{"points": my_route.points, "color": "#17211a", "dashed": False}];
     }
-    if other_route is not None and len(other_route.points) > 1 {
+    if relay is not None {
+        # A 2-ride route: leg 1 in green, leg 2 in blue, meeting at the handoff.
+        lines = [
+            {"points": relay.leg1_points, "color": "#176b45", "dashed": False},
+            {"points": relay.leg2_points, "color": "#386fa4", "dashed": False},
+        ];
+    } elif other_route is not None and len(other_route.points) > 1 {
         lines = lines + [{"points": other_route.points, "color": _accent_hex(info["accent"]), "dashed": True}];
     }
     # Redraw only when the routes themselves change, not on every render.
-    signature = _signature(my_route) + "|" + _signature(other_route);
+    signature = _signature(my_route) + "|" + _signature(other_route) + "|" + (relay.id if relay is not None else "");
 
     return <APIProvider apiKey={api_key}>
         <GoogleMap
@@ -48,8 +56,16 @@ def:pub GoogleMapView(
                     <span className="trip-end">B</span>
                 </AdvancedMarker>
             }}
+            {if relay is not None and relay.handoff is not None {
+                <AdvancedMarker
+                    key="handoff" zIndex={20} title={"Handoff: " + relay.handoff.name}
+                    position={{"lat": relay.handoff.lat, "lng": relay.handoff.lng}}
+                >
+                    <span className="handoff-pin"><Icon name="pin" size={16} /><b>{relay.handoff.name or "Handoff"}</b></span>
+                </AdvancedMarker>
+            }}
             {for (i, c) in enumerate(cards) {
-                if c.other_trip is not None {
+                if c.other_trip is not None and relay is None {
                     <AdvancedMarker
                         key={c.id} title={c.other_handle} zIndex={10 if selected == i else 1}
                         className={"gm-pop" if phase == "revealing" else ""}
@@ -71,9 +87,19 @@ def:pub GoogleMapView(
             <span><i className="legend-red" /> Busy</span>
         </div>
         <div className="type-legend">
-            <span className={"tiny-marker " + info["accent"]}>{info["marker"]}</span>{info["marker_label"]}
-            {my_trip is not None and <span className="type-legend-you"><span className="tiny-end">A</span>Your route</span>}
-            {other_route is not None and <span className="type-legend-you"><i className={"dash-swatch " + info["accent"]} />Their route</span>}
+            {if relay is not None {
+                <span key="l1" className="type-legend-you first"><i className="leg-swatch" />Leg 1</span>
+                <span key="l2" className="type-legend-you"><i className="leg-swatch blue" />Leg 2</span>
+                <span key="h" className="type-legend-you"><span className="tiny-end handoff">H</span>Handoff</span>
+            } else {
+                <span key="m" className="type-legend-you first"><span className={"tiny-marker " + info["accent"]}>{info["marker"]}</span>{info["marker_label"]}</span>
+                if my_trip is not None {
+                    <span key="you" className="type-legend-you"><span className="tiny-end">A</span>Your route</span>
+                }
+                if other_route is not None {
+                    <span key="their" className="type-legend-you"><i className={"dash-swatch " + info["accent"]} />Their route</span>
+                }
+            }}
         </div>
     </APIProvider>;
 }

@@ -1,4 +1,4 @@
-"""Seed a realistic Along demo: 16 log-in-able test users (4 per journey type)
+"""Seed a realistic Along demo: 18 log-in-able test users (4+ per journey type)
 across real Michigan corridors, with conversations in every state and
 completed, rated trips so reputations show up.
 
@@ -11,6 +11,7 @@ Feature coverage (each has at least one live example):
   - chats: anonymous, waiting on a reveal, revealed with contact details,
     declined/closed, completed and rated by both sides
   - reputation: rated travelers with reviews, plus brand-new ones (no ratings)
+  - a 2-ride relay: zoe (Grand Blanc -> Novi) via priya, then noah
 
 `greet`: post a journey from your own account first, then run this — each test
 user whose route fits yours opens a conversation with you and says hello.
@@ -55,11 +56,15 @@ glob PEOPLE: list[dict] = [
     person("dana", "Dana Brooks", "Fenton, MI", "(810) 555-0177", ride("DRIVER", "Fenton, MI", "Ann Arbor, MI", "depart_at", "08:00", seats=2)),
     person("omar", "Omar Haddad", "Lansing, MI", "(517) 555-0131", ride("DRIVER", "Lansing, MI", "Detroit, MI", "depart_at", "07:15", seats=3)),
     person("grace", "Grace Okafor", "Howell, MI", "(517) 555-0156", ride("DRIVER", "Howell, MI", "Ann Arbor, MI", "depart_at", "07:50", seats=2, recurring=False)),
+    # Relay example: no one drives Grand Blanc -> Novi, but Priya (Flint -> Ann Arbor,
+    # via Brighton) + Noah (Brighton -> Detroit, via Novi) make a 2-ride route for Zoe.
+    person("noah", "Noah Williams", "Brighton, MI", "(810) 555-0133", ride("DRIVER", "Brighton, MI", "Detroit, MI", "depart_at", "08:40", seats=3)),
     # --- Find a ride: riders ---
     person("marcus", "Marcus Lee", "Grand Blanc, MI", "(810) 555-0199", ride("RIDER", "Grand Blanc, MI", "Ann Arbor, MI", "arrive_by", "09:00")),
     person("aisha", "Aisha Rahman", "Holly, MI", "(248) 555-0112", ride("RIDER", "Holly, MI", "Ann Arbor, MI", "arrive_by", "09:15", round_trip=True)),
     person("ben", "Ben Carter", "East Lansing, MI", "(517) 555-0190", ride("RIDER", "East Lansing, MI", "Detroit, MI", "arrive_by", "09:00")),
     person("lena", "Lena Fischer", "Brighton, MI", "(810) 555-0168", ride("RIDER", "Brighton, MI", "Ann Arbor, MI", "arrive_by", "08:45", recurring=False)),
+    person("zoe", "Zoe Adams", "Grand Blanc, MI", "(810) 555-0121", ride("RIDER", "Grand Blanc, MI", "Novi, MI", "arrive_by", "09:20")),
     # --- Rent together ---
     person("riley", "Riley Chen", "Novi, MI", "(248) 555-0164", peer("rental", "Novi, MI", "Detroit, MI", "arrive_by", "10:00", people=2, vehicle="Pickup", moving=True)),
     person("kevin", "Kevin Nguyen", "Novi, MI", "(248) 555-0107", peer("rental", "Novi, MI", "Detroit, MI", "depart_at", "09:30", vehicle="SUV", round_trip=True)),

@@ -336,8 +336,30 @@ obj AgentStepView {
     has agent: str = "", role: str = "", summary: str = "", looked_at: int = 0, kept: int = 0;
 }
 
+# Where a relay's two rides meet: a real public place near the point where
+# both drivers' routes come closest, picked by Gemini (or rules as fallback).
+obj HandoffView {
+    has name: str = "", address: str = "", lat: float = 0.0, lng: float = 0.0,
+        kind: str = "", rating: float = 0.0, reviews: int = 0, open_now: str = "",
+        reason: str = "", source: str = "";
+}
+
+# A 2-ride route: driver A takes you to the handoff, driver B takes you on.
+obj RelayView {
+    has id: str = "", leg1_match_id: str = "", leg2_match_id: str = "",
+        leg1_handle: str = "", leg2_handle: str = "",
+        leg1_rating: float = 0.0, leg1_reviews: int = 0,
+        leg2_rating: float = 0.0, leg2_reviews: int = 0,
+        pickup_time: str = "", handoff_time: str = "", wait_min: int = 0,
+        leg2_depart: str = "", arrive_time: str = "", total_min: int = 0,
+        leg1_min: int = 0, leg2_min: int = 0, pickup_gap_mi: float = 0.0,
+        score: int = 0, why: str = "", handoff: HandoffView | None = None,
+        leg1_points: list[list[float]] = [], leg2_points: list[list[float]] = [];
+}
+
 obj AgentRunView {
-    has cards: list[MatchCardView] = [], steps: list[AgentStepView] = [];
+    has cards: list[MatchCardView] = [], steps: list[AgentStepView] = [],
+        relays: list[RelayView] = [];
 }
 
 # Walks every journey hanging off the shared root; keeps the ones whose
