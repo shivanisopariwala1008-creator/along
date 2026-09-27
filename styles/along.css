@@ -809,3 +809,23 @@ button.avatar { cursor: pointer; }
 .forgot-link { align-self: flex-end; font-size: 13px; color: var(--al-green); font-weight: 700; margin-top: -6px; }
 .verify-note { color: var(--al-green-dark) !important; font-weight: 700; }
 .settings-list .btn { margin-left: auto; min-height: 32px; padding: 5px 12px; }
+
+/* Match preferences: age range slider, gender chips, pets segmented control */
+.pref-block { margin-bottom: 18px; }
+.pref-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 9px; }
+.pref-label { font-weight: 700; font-size: 13px; }
+.pref-head strong { font-size: 13px; color: var(--al-green-dark); }
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.segmented { display: flex; gap: 4px; background: var(--al-surface-soft); padding: 4px; border-radius: 12px; flex-wrap: wrap; }
+.seg { flex: 1; min-width: 120px; border: 0; background: transparent; border-radius: 9px; padding: 9px 10px; font-size: 13px; color: var(--al-muted); cursor: pointer; }
+.seg.on { background: white; color: var(--al-green-dark); font-weight: 700; box-shadow: var(--al-shadow-small); }
+.age-range { position: relative; height: 28px; }
+.age-track { position: absolute; left: 0; right: 0; top: 12px; height: 4px; border-radius: 4px; background: var(--al-line); }
+.age-track i { position: absolute; top: 0; height: 100%; border-radius: 4px; background: var(--al-green); }
+.age-range input[type=range] { position: absolute; left: 0; right: 0; top: 4px; width: 100%; margin: 0; background: transparent; pointer-events: none; -webkit-appearance: none; appearance: none; height: 20px; }
+.age-range input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; pointer-events: auto; width: 20px; height: 20px; border-radius: 50%; background: white; border: 3px solid var(--al-green); box-shadow: var(--al-shadow-small); cursor: pointer; }
+.age-range input[type=range]::-moz-range-thumb { pointer-events: auto; width: 16px; height: 16px; border-radius: 50%; background: white; border: 3px solid var(--al-green); cursor: pointer; }
+.age-range input[type=range]::-webkit-slider-runnable-track { background: transparent; }
+.age-range input[type=range]::-moz-range-track { background: transparent; }
+.age-scale { display: flex; justify-content: space-between; font-size: 12px; color: var(--al-muted); margin-top: 2px; }
+.edit-hint { grid-column: 1 / -1; font-size: 12px; color: var(--al-muted); margin: 0; }

@@ -20,6 +20,8 @@ def:pub ProfilePage() -> JsxElement {
         name_draft: str = "",
         region_draft: str = "",
         phone_draft: str = "",
+        age_draft: str = "",
+        gender_draft: str = "",
         saving: bool = False,
         error: str = "";
 
@@ -55,6 +57,8 @@ def:pub ProfilePage() -> JsxElement {
             name_draft = profile.display_name;
             region_draft = profile.home_region;
             phone_draft = profile.phone;
+            age_draft = str(profile.age) if profile.age else "";
+            gender_draft = profile.gender;
         }
         error = "";
         editing = True;
@@ -70,7 +74,9 @@ def:pub ProfilePage() -> JsxElement {
         display_name = name_draft;
         home_region = region_draft;
         phone = phone_draft;
-        profile = await update_profile_details(display_name, home_region, phone);
+        age: int = int(age_draft) if age_draft.strip().isdigit() else 0;
+        gender = gender_draft;
+        profile = await update_profile_details(display_name, home_region, phone, age, gender);
         saving = False;
         editing = False;
     }
@@ -132,6 +138,23 @@ def:pub ProfilePage() -> JsxElement {
                                 <span>Phone (hidden until you both reveal)</span>
                                 <div><input type="tel" value={phone_draft} onChange={lambda (e: ChangeEvent) { phone_draft = e.target.value; }} placeholder="(810) 555-0148" autoComplete="tel" /></div>
                             </label>
+                            <label className="field">
+                                <span>Age (optional)</span>
+                                <div><input type="number" min="1" max="120" value={age_draft} onChange={lambda (e: ChangeEvent) { age_draft = e.target.value; }} placeholder="e.g. 28" /></div>
+                            </label>
+                            <label className="field">
+                                <span>Gender (optional)</span>
+                                <div>
+                                    <select value={gender_draft} onChange={lambda (e: ChangeEvent) { gender_draft = e.target.value; }}>
+                                        <option value="">Prefer not to say</option>
+                                        <option value="woman">Woman</option>
+                                        <option value="man">Man</option>
+                                        <option value="non-binary">Non-binary</option>
+                                    </select>
+                                    <Icon name="chevron" />
+                                </div>
+                            </label>
+                            <p className="edit-hint">Age and gender are only used so other travelers’ match preferences can include you. They’re never shown on your profile.</p>
                             {error and <p className="form-error">{error}</p>}
                             <div className="edit-actions">
                                 <button className="btn btn-secondary" onClick={lambda (e: MouseEvent) { editing = False; }}>Cancel</button>

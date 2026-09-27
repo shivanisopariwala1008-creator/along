@@ -22,7 +22,9 @@ glob VEHICLES: list[list[str]] = [
 
 glob SPACE_OPTIONS: list[str] = ["A few boxes", "Boxes + small furniture", "One room", "Studio / 1-bedroom", "2+ bedrooms"];
 
-glob DISTANCES: list[str] = ["Up to 2 miles", "Up to 5 miles", "Up to 10 miles"];
+glob DISTANCES: list[str] = ["Up to 2 miles", "Up to 5 miles", "Up to 10 miles"],
+     GENDERS: list[list[str]] = [["woman", "Women"], ["man", "Men"], ["non-binary", "Non-binary"]],
+     PETS: list[list[str]] = [["any", "No preference"], ["bringing", "I’m bringing a pet"], ["none", "No pets, please"]];
 
 # Route wrapper: keying on the journey type resets the form when switching types.
 def:pub JourneyRoute() -> JsxElement {
@@ -63,6 +65,10 @@ def:pub JourneyForm(kind: str) -> JsxElement {
         moving_help: bool = kind == "rental",
         age_pref: str = "No preference",
         gender_pref: str = "No preference",
+        age_min: int = 1,
+        age_max: int = 100,
+        gender_prefs: list[str] = [],
+        pets_pref: str = "any",
         submitting: bool = False,
         error: str = "";
 
@@ -128,6 +134,10 @@ def:pub JourneyForm(kind: str) -> JsxElement {
         if cfg {
             maps_key = cfg.api_key;
         }
+    }
+
+    def toggle_gender(g: str) {
+        gender_prefs = [x for x in gender_prefs if x != g] if g in gender_prefs else gender_prefs + [g];
     }
 
     def swap(e: MouseEvent) {
@@ -215,7 +225,8 @@ def:pub JourneyForm(kind: str) -> JsxElement {
                 recurring, flexible_minutes, seats_available, people, max_detour_minutes,
                 pickup_distance, vehicle, moving_help, age_pref, gender_pref, notes,
                 origin_lat, origin_lng, destination_lat, destination_lng,
-                round_trip and kind != "rental", return_date, space_needed
+                round_trip and kind != "rental", return_date, space_needed,
+                age_min, age_max, gender_prefs, pets_pref
             );
             nav("/results?tripId=" + trip_id);
         } except Exception as ex {
@@ -224,7 +235,7 @@ def:pub JourneyForm(kind: str) -> JsxElement {
         }
     }
 
-    step_prefs = "4" if kind == "rental" else "3";
+    step_prefs = "4" if kind == "rental" else "2";
     distance_label = "Maximum detour" if kind == "buddy" else ("Acceptable pickup distance" if kind == "rental" else "Maximum pickup distance");
     count_options = [1, 2, 3, 4];
 
@@ -371,16 +382,54 @@ def:pub JourneyForm(kind: str) -> JsxElement {
                     </section>
                 }}
 
-                <button type="button" className="more-options" onClick={lambda (e: MouseEvent) { show_more = not show_more; }} aria-expanded={show_more}>
+                <section className="form-card">
+                    <div className="form-card-title">
+                        <span>{step_prefs}</span>
+                        <div><h2>Who you’d like to travel with</h2><p>Optional — leave these as they are to match with anyone.</p></div>
+                    </div>
+                    <AgeRange min_age={age_min} max_age={age_max} onChange={lambda (lo: int, hi: int) { age_min = lo; age_max = hi; }} />
+                    <div className="pref-block">
+                        <div className="pref-head"><span className="pref-label">Gender</span><strong>{"Anyone" if len(gender_prefs) == 0 else str(len(gender_prefs)) + " selected"}</strong></div>
+                        <div className="chip-row">
+                            {for g in GENDERS {
+                                <button
+                                    key={g[0]} type="button" aria-pressed={g[0] in gender_prefs}
+                                    className={"tag-chip" + (" on" if g[0] in gender_prefs else "")}
+                                    onClick={lambda (e: MouseEvent) { toggle_gender(g[0]); }}
+                                >
+                                    {g[0] in gender_prefs and <Icon name="check" size={13} />} {g[1]}
+                                </button>
+                            }}
+                        </div>
+                    </div>
+                    <div className="pref-block">
+                        <div className="pref-head"><span className="pref-label">Pets</span></div>
+                        <div className="segmented" role="radiogroup" aria-label="Pets">
+                            {for pt in PETS {
+                                <button
+                                    key={pt[0]} type="button" role="radio" aria-checked={pets_pref == pt[0]}
+                                    className={"seg" + (" on" if pets_pref == pt[0] else "")}
+                                    onClick={lambda (e: MouseEvent) { pets_pref = pt[0]; }}
+                                >{pt[1]}</button>
+                            }}
+                        </div>
+                    </div>
+                    <div className="privacy-note">
+                        <Icon name="shield" />
+                        <span><strong>Your privacy comes first</strong><small>Add your own age and gender in your profile so others’ preferences can include you — they’re only used for matching and never shown.</small></span>
+                    </div>
+                </section>
+
+                {kind != "rental" and <button type="button" className="more-options" onClick={lambda (e: MouseEvent) { show_more = not show_more; }} aria-expanded={show_more}>
                     <Icon name="tune" />
-                    <span><strong>More options</strong><small>{("Match preferences" if kind == "rental" else "Timing and match preferences") + " — optional"}</small></span>
+                    <span><strong>More options</strong><small>Timing and number of people — optional</small></span>
                     <Icon name="chevron" className={"more-chevron" + (" open" if show_more else "")} />
-                </button>
+                </button>}
                 {if show_more {
                     if kind != "rental" {
                     <section key="timing" className="form-card">
                         <div className="form-card-title">
-                            <span>2</span>
+                            <span>3</span>
                             <div><h2>Timing &amp; flexibility</h2><p>Tell us what works, and we’ll find the best overlap.</p></div>
                         </div>
                         <div className="field-grid">
@@ -418,28 +467,7 @@ def:pub JourneyForm(kind: str) -> JsxElement {
 
                     }
 
-                    <section key="prefs" className="form-card">
-                        <div className="form-card-title">
-                            <span>{step_prefs}</span>
-                            <div><h2>Match preferences</h2><p>Every option includes “No preference.”</p></div>
-                        </div>
-                        <div className="field-grid">
-                            <SelectField
-                                label="Age preference" value={age_pref}
-                                options={["No preference", "18–25", "26–40", "41–60", "60+"]}
-                                onValue={lambda (v: str) { age_pref = v; }}
-                            />
-                            <SelectField
-                                label="Gender preference" value={gender_pref}
-                                options={["No preference", "Women", "Men", "Non-binary"]}
-                                onValue={lambda (v: str) { gender_pref = v; }}
-                            />
-                        </div>
-                        <div className="privacy-note">
-                            <Icon name="shield" />
-                            <span><strong>Your privacy comes first</strong><small>Exact addresses and identity stay private until both people agree.</small></span>
-                        </div>
-                    </section>
+
                 }}
                 {error and <p className="form-error" role="alert">{error}</p>}
 
@@ -492,4 +520,28 @@ def:pub SelectField(label: str, value: str, options: list[str], onValue: Callabl
             <Icon name="chevron" />
         </div>
     </label>;
+}
+
+# Two-handle age slider, 1 to 100+ ("Any age" when fully open).
+def:pub AgeRange(min_age: int, max_age: int, onChange: Callable[[int, int], None]) -> JsxElement {
+    def set_low(e: ChangeEvent) {
+        v: int = int(e.target.value);
+        onChange(min(v, max_age - 1), max_age);
+    }
+    def set_high(e: ChangeEvent) {
+        v: int = int(e.target.value);
+        onChange(min_age, max(v, min_age + 1));
+    }
+    left: float = (min_age - 1) / 99 * 100;
+    right: float = (max_age - 1) / 99 * 100;
+    label = "Any age" if min_age <= 1 and max_age >= 100 else (str(min_age) + " – " + (str(max_age) if max_age < 100 else "100+"));
+    return <div className="pref-block">
+        <div className="pref-head"><span className="pref-label">Age</span><strong>{label}</strong></div>
+        <div className="age-range">
+            <div className="age-track"><i style={{"left": str(left) + "%", "width": str(right - left) + "%"}} /></div>
+            <input type="range" min="1" max="100" step="1" value={str(min_age)} onChange={set_low} aria-label="Youngest age" />
+            <input type="range" min="1" max="100" step="1" value={str(max_age)} onChange={set_high} aria-label="Oldest age" />
+        </div>
+        <div className="age-scale"><span>1</span><span>100+</span></div>
+    </div>;
 }

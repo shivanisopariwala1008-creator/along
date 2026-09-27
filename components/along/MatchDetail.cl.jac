@@ -172,7 +172,14 @@ def _preference_chips(t: TripView | None) -> list[str] {
     if t is None {
         return [];
     }
-    chips = ["Age: " + (t.age_pref or "No preference"), "Gender: " + (t.gender_pref or "No preference")];
+    ages = "Any age" if t.age_min <= 1 and t.age_max >= 100 else ("Ages " + str(t.age_min) + "–" + (str(t.age_max) if t.age_max < 100 else "100+"));
+    genders = "Anyone" if len(t.gender_prefs) == 0 else _gender_list(t.gender_prefs);
+    chips = [ages, "Travels with: " + genders];
+    if t.pets_pref == "bringing" {
+        chips = chips + ["Bringing a pet"];
+    } elif t.pets_pref == "none" {
+        chips = chips + ["No pets, please"];
+    }
     chips = chips + (["Smoking OK"] if t.smoking else ["Non-smoking"]);
     if t.mode == "rental" {
         chips = chips + ["Vehicle: " + (t.vehicle or "Flexible")];
@@ -193,4 +200,13 @@ def _preference_chips(t: TripView | None) -> list[str] {
         chips = chips + ["Flexible ±" + str(t.flexible_minutes) + " min"];
     }
     return chips;
+}
+
+def _gender_list(prefs: list[str]) -> str {
+    names = {"woman": "Women", "man": "Men", "non-binary": "Non-binary"};
+    out = "";
+    for g in prefs {
+        out = out + (", " if out else "") + names.get(g, g);
+    }
+    return out;
 }

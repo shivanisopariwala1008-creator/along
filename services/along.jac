@@ -38,7 +38,9 @@ node User {
         identity_reveal_allowed: bool = False,
         trust_score: int = 80,
         handle_number: int = 0,
-        member_since: str = "";
+        member_since: str = "",
+        age: int = 0,                         # optional; only used to honour match preferences
+        gender: str = "";                     # optional: woman | man | non-binary | ""
 }
 
 node Trip {
@@ -81,7 +83,16 @@ node Trip {
         round_trip: bool = False,
         return_date: str = "",                # rentals: when the car goes back
         space_needed: str = "",               # rentals when moving: how much cargo space
-        matchmaker_done: bool = False;        # have others been told about this journey yet?
+        matchmaker_done: bool = False,        # have others been told about this journey yet?
+        # Who this traveler is happy to travel with (all journey types).
+        age_min: int = 1,
+        age_max: int = 100,                   # 100 means "100+"
+        gender_prefs: list[str] = [],         # empty = anyone
+        pets_pref: str = "any",               # any | bringing | none
+        # Snapshot of the poster's own age/gender, used ONLY by the matcher to
+        # honour other people's preferences. Never sent to any client.
+        owner_age: int = 0,
+        owner_gender: str = "";
 }
 
 node Location {
@@ -250,7 +261,8 @@ obj TripView {
         origin_lat: float = 0.0, origin_lng: float = 0.0,
         destination_lat: float = 0.0, destination_lng: float = 0.0,
         owner_rating: float = 0.0, owner_reviews: int = 0, round_trip: bool = False,
-        return_date: str = "", space_needed: str = "";
+        return_date: str = "", space_needed: str = "",
+        age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = [], pets_pref: str = "any";
 }
 
 # A place that rents cars near a pickup point (Google Places).
@@ -363,7 +375,7 @@ obj ProfileView {
     has display_name: str = "", home_region: str = "", rider_handle: str = "",
         driver_handle: str = "", verified: bool = False,
         phone: str = "", member_since: str = "", has_ratings: bool = False,
-        completed_connections: int = 0;
+        completed_connections: int = 0, age: int = 0, gender: str = "";
 }
 
 obj ImpactView {
@@ -548,7 +560,8 @@ def create_journey(
     # Exact coordinates from the Google Places dropdown; 0 = look the name up.
     origin_lat: float = 0.0, origin_lng: float = 0.0,
     destination_lat: float = 0.0, destination_lng: float = 0.0,
-    round_trip: bool = False, return_date: str = "", space_needed: str = ""
+    round_trip: bool = False, return_date: str = "", space_needed: str = "",
+    age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = [], pets_pref: str = "any"
 ) -> str;
 
 # Car-rental counters near a point, nearest first (needs a Google Maps key).
@@ -622,7 +635,7 @@ def get_my_notifications() -> list[NotificationView];
 
 def mark_notifications_read(ids: list[str]) -> int;
 
-def update_profile_details(display_name: str, home_region: str, phone: str) -> ProfileView;
+def update_profile_details(display_name: str, home_region: str, phone: str, age: int = 0, gender: str = "") -> ProfileView;
 
 # --- Google Maps ---
 
