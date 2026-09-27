@@ -3180,12 +3180,13 @@ impl cancel_relay(plan_id: str) -> bool {
 # mirrored onto the profile and a public badge.
 # ---------------------------------------------------------------------------
 
-import from jac_scale.user_manager { JacScaleUserManager }
-
 glob _USER_MANAGER: list[any] = [];
 
+# jac-scale's account store, imported lazily: hosts like Jac Hammer run their
+# own server without jac-scale, and email status is optional ("Coming soon").
 def _user_manager() -> any {
     if len(_USER_MANAGER) == 0 {
+        import from jac_scale.user_manager { JacScaleUserManager }
         _USER_MANAGER.append(JacScaleUserManager(base_path=Jac.get_base_path_dir()));
     }
     return _USER_MANAGER[0];
