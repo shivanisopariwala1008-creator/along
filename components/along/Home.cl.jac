@@ -24,7 +24,7 @@ def:pub Home() -> JsxElement {
                     <TripAssistant />
                     <p className="hero-sub">Find people heading your way, make a trusted connection, and move through Michigan together.</p>
                     <button className="demo-button" onClick={lambda (e: MouseEvent) { nav("/demo"); }}>
-                        <span className="demo-play">▶</span> View demo <small>3 min · narrated</small>
+                        <span className="demo-play">▶</span> View demo <small>4 min · narrated</small>
                     </button>
                 </div>
                 <div className="mini-map-wrap" aria-hidden="true">
