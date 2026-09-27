@@ -16,18 +16,6 @@ base_route_app = "app"
 default_model = "${LLM_MODEL:-gpt-4o-mini}"
 api_key = "${OPENAI_API_KEY:-}"
 
-# Python packages the server needs. Jac Hammer installs from this list, so
-# jac-scale (login, sign-up, MongoDB storage) must be here, not only in
-# requirements.txt.
-[dependencies]
-jac-scale = ">=0.2.31"
-jac-client = ">=0.3.25"
-jac-super = ">=0.1.22"
-pymongo = ">=4.18.2"
-certifi = "*"
-requests = "*"
-redis = "*"
-
 [dependencies.npm]
 sonner = "*"
 shadcn = "^3.8.5"
