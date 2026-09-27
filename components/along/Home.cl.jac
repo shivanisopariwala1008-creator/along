@@ -4,6 +4,7 @@ ways to travel, and the trust strip."""
 import from "@jac/runtime" { useNavigate, Link }
 import from .Icon { Icon }
 import from .AppHeader { AppHeader }
+import from .TripAssistant { TripAssistant }
 import from ...lib.along { flow_keys, flow_info }
 
 def:pub Home() -> JsxElement {
@@ -21,6 +22,7 @@ def:pub Home() -> JsxElement {
                     <div className="eyebrow"><span className="live-dot" />Travel together across Michigan</div>
                     <h1>Shared journeys.<br /><em>Stronger communities.</em></h1>
                     <p>Find people heading your way, make a trusted connection, and move through Michigan together.</p>
+                    <TripAssistant />
                 </div>
                 <div className="mini-map-wrap" aria-hidden="true">
                     <div className="mini-map">

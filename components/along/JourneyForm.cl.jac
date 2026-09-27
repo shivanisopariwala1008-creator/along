@@ -8,6 +8,7 @@ import from "@vis.gl/react-google-maps" { APIProvider }
 import from .Icon { Icon }
 import from .AppHeader { AppHeader }
 import from .PlaceInput { PlaceInput }
+import from .TripAssistant { take_trip_draft }
 import from ...lib.along { flow_info, mode_of, role_of, today_iso }
 sv import from ...services.along { create_journey, get_maps_config, MapsConfigView }
 
@@ -41,6 +42,8 @@ def:pub JourneyForm(kind: str) -> JsxElement {
         round_trip: bool = False,
         show_more: bool = False,
         places_down: bool = False,
+        draft_note: str = "",
+        draft_sentence: str = "",
         maps_key: str = "",
         recurring: bool = kind == "ride" or kind == "buddy",
         travel_date: str = today_iso(),
@@ -56,6 +59,41 @@ def:pub JourneyForm(kind: str) -> JsxElement {
         error: str = "";
 
     nav = useNavigate();
+
+    # Pre-fill from the trip assistant's draft, if it just sent us here.
+    can with entry {
+        d: any = take_trip_draft();
+        if not d {
+            return;
+        }
+        origin_name = (d["origin_name"] or "") as str;
+        origin_lat = (d["origin_lat"] or 0.0) as float;
+        origin_lng = (d["origin_lng"] or 0.0) as float;
+        destination_name = (d["destination_name"] or "") as str;
+        destination_lat = (d["destination_lat"] or 0.0) as float;
+        destination_lng = (d["destination_lng"] or 0.0) as float;
+        round_trip = bool(d["round_trip"]);
+        recurring = bool(d["recurring"]);
+        if d["travel_date"] {
+            travel_date = d["travel_date"] as str;
+        }
+        if d["time"] {
+            time = d["time"] as str;
+            time_preference = (d["time_preference"] or time_preference) as str;
+        }
+        if kind == "buddy" and d["seats"] {
+            count = d["seats"] as int;
+        } elif kind != "buddy" and d["people"] {
+            count = d["people"] as int;
+        }
+        if d["vehicle"] {
+            vehicle = d["vehicle"] as str;
+        }
+        moving_help = bool(d["moving_help"]) or moving_help;
+        show_more = True;   # let them see the timing the assistant picked
+        draft_note = (d["summary"] or "") as str;
+        draft_sentence = (d["sentence"] or "") as str;
+    }
 
     async can with entry {
         cfg: MapsConfigView | None = await get_maps_config();
@@ -158,6 +196,16 @@ def:pub JourneyForm(kind: str) -> JsxElement {
                 <h1>{info["heading"]}</h1>
                 <p>{info["description"]}</p>
             </div>
+            {if draft_note or draft_sentence {
+                <div key="draft" className="assistant-banner" role="status">
+                    <Icon name="spark" />
+                    <div>
+                        <strong>Filled in by Along’s assistant — check it, then post</strong>
+                        <p>{draft_note}</p>
+                        {draft_sentence and <small>{"You said: “" + draft_sentence + "”"}</small>}
+                    </div>
+                </div>
+            }}
             <form className="journey-form" onSubmit={handle_submit}>
                 <section className="form-card">
                     <div className="form-card-title">

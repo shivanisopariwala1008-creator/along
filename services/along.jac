@@ -313,6 +313,20 @@ obj Candidate {
         overall: int = 0, notes: dict[str, str] = {};
 }
 
+# A journey drafted from plain English by the trip assistant. The user always
+# reviews it on the normal form before anything is posted.
+obj TripDraftView {
+    has ok: bool = False, source: str = "",        # gemini | rules
+        kind: str = "ride",                         # ride | buddy | rental | cab
+        origin_name: str = "", destination_name: str = "",
+        origin_lat: float = 0.0, origin_lng: float = 0.0,
+        destination_lat: float = 0.0, destination_lng: float = 0.0,
+        time: str = "", time_preference: str = "arrive_by",
+        recurring: bool = False, travel_date: str = "", round_trip: bool = False,
+        seats: int = 0, people: int = 1, vehicle: str = "", moving_help: bool = False,
+        summary: str = "", missing: list[str] = [];
+}
+
 obj NotificationView {
     has id: str = "", kind: str = "", title: str = "", body: str = "",
         match_id: str = "", trip_id: str = "", created_at: str = "", read: bool = False;
@@ -438,6 +452,10 @@ def complete_match(match_id: str) -> bool;
 def rate_match(match_id: str, stars: int, comment: str, tags: list[str] = []) -> bool;
 
 def get_traveler_profile(match_id: str) -> TravelerProfileView | None;
+
+# --- Trip assistant: plain English -> journey draft (Gemini, with a rules fallback) ---
+
+def plan_trip(text: str) -> TripDraftView;
 
 # --- Notifications (the Matchmaker and chat create them) ---
 

@@ -600,3 +600,25 @@ button.avatar { cursor: pointer; }
 .bell-empty svg { color: var(--al-green); }
 .bell-empty p { font-size: 11px; line-height: 1.5; margin: 0; }
 @media (prefers-reduced-motion: reduce) { .bell-button.has-unread svg { animation: none; } }
+
+/* Trip assistant (home hero) + pre-filled banner (journey form) */
+.trip-assistant { margin-top: 26px; max-width: 580px; }
+.trip-assistant > label { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; color: var(--al-green); margin-bottom: 9px; }
+.assistant-box { display: flex; gap: 8px; align-items: center; background: white; border: 1px solid var(--al-line); border-radius: 16px; padding: 6px 6px 6px 16px; box-shadow: var(--al-shadow-small); transition: .2s; }
+.assistant-box:focus-within { border-color: var(--al-green); box-shadow: 0 0 0 4px var(--al-green-soft), var(--al-shadow-small); }
+.assistant-box input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 14px; color: var(--al-ink); }
+.app-shell .assistant-box input:focus-visible { outline: none; }
+.assistant-box .btn { flex: 0 0 auto; }
+.assistant-examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.assistant-examples button { border: 1px solid var(--al-line); background: rgba(255,255,255,.7); border-radius: 20px; padding: 6px 11px; font-size: 11px; color: #415046; cursor: pointer; }
+.assistant-examples button:hover { border-color: var(--al-green); color: var(--al-green); }
+.assistant-hint { font-size: 12px; color: #a63c34; margin: 10px 0 0; }
+.assistant-banner { width: min(800px, 100%); margin: 0 auto 16px; display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: 14px; background: linear-gradient(135deg, #f1f9e3, #f4faf6); border: 1px solid #cfe5a3; }
+.assistant-banner > svg { color: var(--al-green); flex: 0 0 auto; margin-top: 2px; }
+.assistant-banner strong { font-size: 13px; }
+.assistant-banner p { font-size: 12px; margin: 4px 0 0; color: var(--al-ink); }
+.assistant-banner small { display: block; font-size: 11px; color: var(--al-muted); margin-top: 5px; }
+@media (max-width: 700px) {
+  .assistant-box { flex-direction: column; align-items: stretch; padding: 10px; }
+  .assistant-box .btn { width: 100%; }
+}

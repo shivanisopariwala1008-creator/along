@@ -1547,3 +1547,235 @@ impl mark_notifications_read(ids: list[str]) -> int {
     }
     return changed;
 }
+
+# ---------------------------------------------------------------------------
+# Trip assistant — plain English -> journey draft
+#
+# Gemini is called directly over REST (no byllm/litellm), which keeps the
+# server small enough for Render's free plan. With no key, or if Gemini
+# fails, a rule-based reader handles common phrasings, so it never breaks.
+# ---------------------------------------------------------------------------
+
+import re;
+
+glob VEHICLE_CHOICES: list[str] = ["Compact", "Sedan", "SUV", "Minivan", "Pickup", "Moving van"],
+     WEEKDAYS: list[str] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+def _gemini_key() -> str {
+    return os.environ.get("GEMINI_API_KEY", "").strip();
+}
+
+def _draft_schema() -> dict {
+    return {
+        "type": "OBJECT",
+        "properties": {
+            "journey_type": {"type": "STRING", "enum": ["ride", "buddy", "rental", "cab"],
+                "description": "ride = needs a ride from a driver; buddy = is driving and offering seats; rental = wants to share a car rental; cab = wants to split a cab/taxi/rideshare"},
+            "pickup": {"type": "STRING", "description": "Start place as the user wrote it, e.g. 'Grand Blanc, MI' or 'Detroit Metro Airport'. Empty if not given."},
+            "dropoff": {"type": "STRING", "description": "Destination place. Empty if not given."},
+            "time": {"type": "STRING", "description": "24h HH:MM, or empty if no time was given"},
+            "time_preference": {"type": "STRING", "enum": ["arrive_by", "depart_at"],
+                "description": "arrive_by for 'by 9', 'need to be there at'; depart_at for 'leaving at', 'around 7'"},
+            "recurring": {"type": "BOOLEAN", "description": "true for commutes: every weekday, daily, Mon-Fri, every morning"},
+            "date": {"type": "STRING", "description": "YYYY-MM-DD for a one-time trip (resolve 'tomorrow', 'Saturday' from today's date), else empty"},
+            "round_trip": {"type": "BOOLEAN", "description": "true if they also come back (and back, return, round trip, back at 5)"},
+            "seats": {"type": "INTEGER", "description": "seats offered when journey_type is buddy, else 0"},
+            "people": {"type": "INTEGER", "description": "people travelling (default 1)"},
+            # Gemini rejects "" in an enum, so "none" stands for no vehicle.
+            "vehicle": {"type": "STRING", "enum": ["none", "Compact", "Sedan", "SUV", "Minivan", "Pickup", "Moving van"]},
+            "moving_help": {"type": "BOOLEAN", "description": "true if they mention moving, boxes, furniture"},
+            "summary": {"type": "STRING", "description": "One short friendly sentence restating the plan"}
+        },
+        "required": ["journey_type", "pickup", "dropoff", "time", "time_preference", "recurring", "date",
+                     "round_trip", "seats", "people", "vehicle", "moving_help", "summary"]
+    };
+}
+
+def _gemini_draft(text: str) -> dict | None {
+    key = _gemini_key();
+    if not key {
+        return None;
+    }
+    model = os.environ.get("GEMINI_MODEL", "").strip() or "gemini-flash-lite-latest";
+    today = datetime.date.today();
+    instruction = (
+        "You turn one sentence from a traveler in Michigan into a structured journey for the Along "
+        "ride-sharing app. Today is " + today.strftime("%A, %Y-%m-%d") + ". Only use what the sentence "
+        "says; leave fields empty/false/0 when unsure. Places are in Michigan unless stated. "
+        "Never invent a pickup or dropoff."
+    );
+    body = {
+        "systemInstruction": {"parts": [{"text": instruction}]},
+        "contents": [{"role": "user", "parts": [{"text": text[:500]}]}],
+        "generationConfig": {
+            "temperature": 0, "responseMimeType": "application/json", "responseSchema": _draft_schema()
+        }
+    };
+    url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
+    result = _http_json(url, body, {"Content-Type": "application/json", "x-goog-api-key": key});
+    if result is None or not result.get("candidates") {
+        return None;
+    }
+    try {
+        raw: str = result["candidates"][0]["content"]["parts"][0]["text"];
+        return json.loads(raw);
+    } except Exception as e {
+        print(f"[assistant] could not read Gemini reply: {e}");
+        return None;
+    }
+}
+
+def _to_hhmm(hour: int, minute: int, meridiem: str) -> str {
+    h = hour;
+    if meridiem.startswith("p") and h < 12 {
+        h += 12;
+    }
+    if meridiem.startswith("a") and h == 12 {
+        h = 0;
+    }
+    if not meridiem and h < 6 {
+        h += 12;    # "by 5" with no am/pm almost always means 5 PM
+    }
+    return f"{h % 24:02d}:{minute:02d}";
+}
+
+# Strip filler the regex can't tell apart from a place: leading verbs
+# ("driving Lansing") and trailing day words ("Detroit Friday").
+def _clean_place(raw: str) -> str {
+    place = raw.strip(" .,");
+    place = re.sub(r"^(?:i'?m |i am |i )?(?:driving|going|heading|leaving|travell?ing|commuting|flying)(?: from)?\s+", "", place, flags=re.I);
+    place = re.sub(r"\s+(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|tonight|this \w+|next \w+)$", "", place, flags=re.I);
+    return place.strip(" .,");
+}
+
+# Handles the common phrasings when Gemini isn't available.
+def _rules_draft(text: str) -> dict {
+    t = text.lower();
+    kind = "ride";
+    if re.search(r"\b(rent|rental|truck|moving van|u-?haul)\b", t) {
+        kind = "rental";
+    } elif re.search(r"\b(cab|taxi|uber|lyft|split a ride|airport)\b", t) {
+        kind = "cab";
+    } elif re.search(r"\b(i'?m driving|i drive|offering|have (\d+ )?(empty )?seats?|giving a ride)\b", t) {
+        kind = "buddy";
+    }
+    pickup = "";
+    dropoff = "";
+    m = re.search(r"from\s+(.+?)\s+to\s+(.+?)(?=\s+(?:by|at|around|every|on|tomorrow|today|this|next|and|leaving|arriving|,)\b|[.,!]|$)", text, re.I);
+    if not m {
+        m = re.search(r"^(?:i need (?:a ride )?|i'?m (?:going|heading|driving) )?(?:from\s+)?([a-z .'-]+?)\s+to\s+([a-z .'-]+?)(?=\s+(?:by|at|around|every|on|tomorrow|and|,)\b|[.,!]|$)", text, re.I);
+    }
+    if m {
+        pickup = _clean_place(m.group(1));
+        dropoff = _clean_place(m.group(2));
+    }
+    time_pref = "depart_at";
+    tm = re.search(r"\b(by|before|arrive(?: by)?|at|around|leaving(?: at)?|leave(?: at)?)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?", t);
+    hhmm = "";
+    if tm {
+        time_pref = "arrive_by" if tm.group(1).startswith(("by", "before", "arrive")) else "depart_at";
+        hhmm = _to_hhmm(int(tm.group(2)), int(tm.group(3) or 0), (tm.group(4) or "").replace(".", ""));
+    }
+    recurring = bool(re.search(r"\b(every (week)?day|weekdays|daily|mon(day)?\s*-\s*fri(day)?|each morning|commute)\b", t));
+    date = "";
+    today = datetime.date.today();
+    if "tomorrow" in t {
+        date = (today + datetime.timedelta(days=1)).isoformat();
+    } elif "today" in t or "tonight" in t {
+        date = today.isoformat();
+    } else {
+        for (i, day) in enumerate(WEEKDAYS) {
+            if day in t and not recurring {
+                ahead = (i - today.weekday()) % 7 or 7;
+                date = (today + datetime.timedelta(days=ahead)).isoformat();
+                break;
+            }
+        }
+    }
+    seats = 0;
+    sm = re.search(r"(\d+)\s+(?:empty\s+)?seats?", t);
+    if sm and kind == "buddy" {
+        seats = int(sm.group(1));
+    }
+    pm = re.search(r"(\d+)\s+(?:of us|people|persons|travelers)", t);
+    people = int(pm.group(1)) if pm else 1;
+    vehicle = "";
+    for v in VEHICLE_CHOICES {
+        if v.lower() in t {
+            vehicle = v;
+        }
+    }
+    return {
+        "journey_type": kind, "pickup": pickup, "dropoff": dropoff, "time": hhmm,
+        "time_preference": time_pref, "recurring": recurring, "date": date,
+        "round_trip": bool(re.search(r"\b(round ?trip|and back|come back|coming back|return|back at)\b", t)),
+        "seats": seats, "people": people, "vehicle": vehicle,
+        "moving_help": bool(re.search(r"\b(moving|boxes|furniture|couch)\b", t)), "summary": ""
+    };
+}
+
+impl plan_trip(text: str) -> TripDraftView {
+    clean = text.strip();
+    if len(clean) < 4 {
+        return TripDraftView(ok=False, summary="Tell me where you're going, e.g. 'Flint to Ann Arbor by 9 every weekday'.");
+    }
+    data = _gemini_draft(clean);
+    source = "gemini";
+    if data is None {
+        data = _rules_draft(clean);
+        source = "rules";
+    }
+    d = data as dict;
+    kind = str(d.get("journey_type") or "ride");
+    if kind not in ["ride", "buddy", "rental", "cab"] {
+        kind = "ride";
+    }
+    draft = TripDraftView(
+        ok=True, source=source, kind=kind,
+        origin_name=str(d.get("pickup") or "").strip()[:80],
+        destination_name=str(d.get("dropoff") or "").strip()[:80],
+        time=str(d.get("time") or "")[:5],
+        time_preference="arrive_by" if d.get("time_preference") == "arrive_by" else "depart_at",
+        recurring=bool(d.get("recurring")), travel_date=str(d.get("date") or "")[:10],
+        round_trip=bool(d.get("round_trip")),
+        seats=max(0, min(int(d.get("seats") or 0), 8)),
+        people=max(1, min(int(d.get("people") or 1), 8)),
+        vehicle=str(d.get("vehicle") or "") if str(d.get("vehicle") or "") in VEHICLE_CHOICES else "",
+        moving_help=bool(d.get("moving_help")),
+        summary=str(d.get("summary") or "")[:200]
+    );
+    if draft.kind == "buddy" and draft.seats == 0 {
+        draft.seats = 3;
+    }
+    # Pin both places on the map (Michigan-biased), so the form arrives ready.
+    if draft.origin_name {
+        found = _geocode(draft.origin_name);
+        if found is not None {
+            draft.origin_lat = found[0];
+            draft.origin_lng = found[1];
+        }
+    }
+    if draft.destination_name {
+        found = _geocode(draft.destination_name);
+        if found is not None {
+            draft.destination_lat = found[0];
+            draft.destination_lng = found[1];
+        }
+    }
+    missing: list[str] = [];
+    if not draft.origin_name {
+        missing.append("pickup");
+    }
+    if not draft.destination_name {
+        missing.append("dropoff");
+    }
+    if not draft.time {
+        missing.append("time");
+    }
+    draft.missing = missing;
+    if not draft.summary {
+        where = (draft.origin_name or "?") + " → " + (draft.destination_name or "?");
+        draft.summary = "Got it: " + where + ".";
+    }
+    return draft;
+}

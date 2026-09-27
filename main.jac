@@ -13,6 +13,7 @@ import from services.along {
     explain_match, get_match_graph, create_anonymous_connection, send_message,
     approve_identity_reveal, get_conversation, get_my_conversations, close_match,
     complete_match, rate_match, get_traveler_profile, get_my_notifications, mark_notifications_read,
+    plan_trip,
     get_impact_metrics, get_maps_config, get_trip_route,
 }
 
