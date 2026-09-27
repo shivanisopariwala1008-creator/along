@@ -119,6 +119,26 @@ def:pub today_iso() -> str {
     return iso[:10];
 }
 
+# ISO timestamp -> "just now" / "5m ago" / "3h ago" / "2d ago".
+def:pub time_ago(iso: str) -> str {
+    if not iso {
+        return "";
+    }
+    then: float = new(Date, iso).getTime();
+    now: float = new(Date).getTime();
+    mins = int((now - then) / 60000);
+    if mins < 1 {
+        return "just now";
+    }
+    if mins < 60 {
+        return str(mins) + "m ago";
+    }
+    if mins < 1440 {
+        return str(int(mins / 60)) + "h ago";
+    }
+    return str(int(mins / 1440)) + "d ago";
+}
+
 def:pub short_place(name: str) -> str {
     return (name or "").split(",")[0];
 }

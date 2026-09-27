@@ -153,6 +153,14 @@ node Rating {
         mode: str = "";              # journey type the review is about
 }
 
+# In-app notification for one recipient (new match, new message). Created by
+# whoever triggers it and shared with the recipient only.
+node Notification {
+    has recipient_root: str = "", kind: str = "",   # match | message
+        title: str = "", body: str = "", match_id: str = "", trip_id: str = "",
+        created_at: str = "", read: bool = False;
+}
+
 node ImpactRecord {
     has estimated_savings: float = 0.0,
         estimated_shared_miles: float = 0.0,
@@ -305,6 +313,11 @@ obj Candidate {
         overall: int = 0, notes: dict[str, str] = {};
 }
 
+obj NotificationView {
+    has id: str = "", kind: str = "", title: str = "", body: str = "",
+        match_id: str = "", trip_id: str = "", created_at: str = "", read: bool = False;
+}
+
 obj AgentStepView {
     has agent: str = "", role: str = "", summary: str = "", looked_at: int = 0, kept: int = 0;
 }
@@ -339,6 +352,13 @@ walker CostAgent {
     has origin_id: str = "", candidates: list[Candidate] = [];
     can start with Root entry;
     can inspect with Trip entry;
+}
+
+# Runs whenever someone posts a journey: sends the agent team out from the
+# new journey and notifies every existing traveler it's a good fit for.
+walker Matchmaker {
+    has trip_id: str = "", notified: int = 0;
+    can watch with Root entry;
 }
 
 # Weighs every specialist's score, ranks, and writes/updates the Match nodes.
@@ -418,6 +438,12 @@ def complete_match(match_id: str) -> bool;
 def rate_match(match_id: str, stars: int, comment: str, tags: list[str] = []) -> bool;
 
 def get_traveler_profile(match_id: str) -> TravelerProfileView | None;
+
+# --- Notifications (the Matchmaker and chat create them) ---
+
+def get_my_notifications() -> list[NotificationView];
+
+def mark_notifications_read(ids: list[str]) -> int;
 
 def update_profile_details(display_name: str, home_region: str, phone: str) -> ProfileView;
 

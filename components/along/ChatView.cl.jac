@@ -13,6 +13,7 @@ import from ...lib.along { flow_of_trip, initials, fmt_time, short_place, trip_t
 sv import from ...services.along {
     create_anonymous_connection, send_message, approve_identity_reveal, get_conversation,
     get_my_conversations, get_match_details, close_match, complete_match,
+    get_my_notifications, mark_notifications_read, NotificationView,
     ConversationView, ConversationSummaryView, MatchDetailView, MatchCardView, TripView
 }
 
@@ -41,6 +42,14 @@ def:pub ChatView(match_id: str) -> JsxElement {
         }
         inbox = await get_my_conversations();
         loading = False;
+        # Opening a chat clears its "new message" notifications.
+        if match_id {
+            pending: list[NotificationView] = await get_my_notifications();
+            ids = [n.id for n in pending if n.match_id == match_id and n.kind == "message" and not n.read];
+            if len(ids) > 0 {
+                _ = await mark_notifications_read(ids);
+            }
+        }
     }
 
     # Poll for the other participant's messages / approval. Reader responses are

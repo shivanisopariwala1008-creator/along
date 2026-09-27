@@ -12,7 +12,8 @@ import from services.along {
     create_journey, get_my_trip, get_my_trips, run_matching, run_agents, get_match_results, get_match_details,
     explain_match, get_match_graph, create_anonymous_connection, send_message,
     approve_identity_reveal, get_conversation, get_my_conversations, close_match,
-    complete_match, rate_match, get_traveler_profile, get_impact_metrics, get_maps_config, get_trip_route,
+    complete_match, rate_match, get_traveler_profile, get_my_notifications, mark_notifications_read,
+    get_impact_metrics, get_maps_config, get_trip_route,
 }
 
 cl {

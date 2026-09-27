@@ -573,3 +573,30 @@ button.avatar { cursor: pointer; }
 .agent-report li p, .agent-notes li p { font-size: 11px; margin: 3px 0 0; color: var(--al-ink); }
 .agent-report li > em { font-style: normal; font-size: 10px; color: var(--al-muted); white-space: nowrap; }
 .agent-notes { padding: 0; }
+
+/* Notifications bell (Matchmaker + messages) */
+.bell-wrap { position: relative; }
+.bell-button { position: relative; width: 38px; height: 38px; border-radius: 50%; border: 0; background: transparent; display: grid; place-items: center; cursor: pointer; color: #415046; }
+.bell-button:hover { background: var(--al-surface-soft); color: var(--al-green); }
+.bell-button.has-unread svg { animation: bell-ring 2.4s ease-in-out infinite; transform-origin: 50% 10%; }
+@keyframes bell-ring { 0%, 70%, 100% { transform: rotate(0); } 75% { transform: rotate(14deg); } 80% { transform: rotate(-12deg); } 85% { transform: rotate(8deg); } 90% { transform: rotate(-4deg); } }
+.bell-button b { position: absolute; top: 3px; right: 2px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--al-red); color: white; font-size: 9px; display: grid; place-items: center; border: 2px solid var(--al-bg); }
+.bell-panel { position: absolute; right: -8px; top: calc(100% + 10px); width: min(360px, calc(100vw - 24px)); background: white; border: 1px solid var(--al-line); border-radius: 16px; box-shadow: var(--al-shadow); z-index: 60; overflow: hidden; }
+.bell-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 10px; }
+.bell-head strong { font: 700 14px "Manrope"; }
+.bell-head button { border: 0; background: none; color: var(--al-green); font-size: 11px; font-weight: 700; cursor: pointer; }
+.bell-panel ul { list-style: none; margin: 0; padding: 0 6px 8px; max-height: 380px; overflow-y: auto; }
+.bell-panel li button { width: 100%; border: 0; background: transparent; display: flex; gap: 10px; text-align: left; padding: 10px; border-radius: 10px; cursor: pointer; color: var(--al-ink); }
+.bell-panel li button:hover { background: var(--al-surface-soft); }
+.bell-panel li.unread button { background: #f4faf6; }
+.bell-panel li.unread strong::after { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--al-green); margin-left: 6px; vertical-align: middle; }
+.bell-panel li span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.bell-panel li strong { font-size: 12px; }
+.bell-panel li small { color: var(--al-muted); font-size: 11px; line-height: 1.45; margin-top: 2px; }
+.bell-panel li em { font-style: normal; color: var(--al-muted); font-size: 10px; margin-top: 4px; }
+.bell-icon { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; flex: 0 0 auto; background: var(--al-lime); color: var(--al-green-dark); }
+.bell-icon.message { background: var(--al-blue-soft); color: var(--al-blue); }
+.bell-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 18px 22px 22px; color: var(--al-muted); }
+.bell-empty svg { color: var(--al-green); }
+.bell-empty p { font-size: 11px; line-height: 1.5; margin: 0; }
+@media (prefers-reduced-motion: reduce) { .bell-button.has-unread svg { animation: none; } }

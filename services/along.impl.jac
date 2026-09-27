@@ -540,6 +540,8 @@ impl create_journey(
 
     # Make sure there is always someone to match with in the demo.
     seed_demo_network();
+    # Tell everyone already travelling this way that a new match just appeared.
+    root.shared spawn Matchmaker(trip_id=jid(trip));
     return jid(trip);
 }
 
@@ -1162,6 +1164,10 @@ impl send_message(match_id: str, body: str) -> ConversationView | None {
     if clean {
         handle = mt.rider_handle if _my_role(mt) == "RIDER" else mt.driver_handle;
         _add_message(convo as Conversation, handle, _my_root_id(), clean, _now());
+        _notify(
+            _other_root(mt), "message", "New message from " + handle,
+            clean[:90] + ("…" if len(clean) > 90 else ""), jid(mt), "", True
+        );
     }
     return _convo_view(mt, convo as Conversation);
 }
@@ -1446,4 +1452,98 @@ impl get_traveler_profile(match_id: str) -> TravelerProfileView | None {
         }
     }
     return view;
+}
+
+# ---------------------------------------------------------------------------
+# Matchmaker + notifications
+# ---------------------------------------------------------------------------
+
+glob NOTIFY_MIN_SCORE: int = 60,     # don't ping people about weak matches
+     NOTIFY_MAX_PER_POST: int = 8;
+
+def _iso_now() -> str {
+    return datetime.datetime.now(datetime.timezone.utc).isoformat();
+}
+
+# Create (or refresh) a notification for another user. `coalesce` folds a
+# burst of chat messages into one unread notification per conversation.
+def _notify(recipient: str, kind: str, title: str, body: str, match_id: str, trip_id: str, coalesce: bool = False) -> None {
+    if not recipient or recipient == "demo" or recipient == _my_root_id() {
+        return;
+    }
+    if coalesce {
+        for n in [root.shared-->][?:Notification] {
+            if n.recipient_root == recipient and n.kind == kind and n.match_id == match_id and not n.read {
+                n.title = title;
+                n.body = body;
+                n.created_at = _iso_now();
+                return;
+            }
+        }
+    }
+    n = Notification(
+        recipient_root=recipient, kind=kind, title=title, body=body,
+        match_id=match_id, trip_id=trip_id, created_at=_iso_now()
+    );
+    root.shared ++> n;
+    _share_with(n, recipient, WritePerm);   # the recipient can mark it read
+}
+
+impl Matchmaker.watch {
+    posted = _load_trip(self.trip_id);
+    if posted is None {
+        skip;
+    }
+    p = posted as Trip;
+    run = run_agents(self.trip_id);
+    route = p.origin_name.split(",")[0] + " → " + p.destination_name.split(",")[0];
+    for card in run.cards[:NOTIFY_MAX_PER_POST] {
+        other = card.other_trip;
+        if other is None or card.overall_score < NOTIFY_MIN_SCORE {
+            continue;
+        }
+        other_trip = _load_trip(other.id);
+        if other_trip is None {
+            continue;
+        }
+        theirs = other_trip as Trip;
+        their_route = theirs.origin_name.split(",")[0] + " → " + theirs.destination_name.split(",")[0];
+        who = "driver" if p.role == "DRIVER" else ("rider" if p.role == "RIDER" else "traveler");
+        _notify(
+            theirs.owner_root, "match",
+            f"New {card.overall_score}% match for your {their_route} journey",
+            f"A {who} just posted {route} ({card.fit_label.lower()}). Along's agents think you'd travel well together.",
+            card.id, jid(theirs)
+        );
+        self.notified += 1;
+    }
+}
+
+def _notification_time(n: NotificationView) -> str {
+    return n.created_at;
+}
+
+impl get_my_notifications() -> list[NotificationView] {
+    me = _my_root_id();
+    mine = [
+        NotificationView(
+            id=jid(n), kind=n.kind, title=n.title, body=n.body, match_id=n.match_id,
+            trip_id=n.trip_id, created_at=n.created_at, read=n.read
+        )
+        for n in [root.shared-->][?:Notification] if n.recipient_root == me
+    ];
+    return sorted(mine, key=_notification_time, reverse=True)[:30];
+}
+
+# Marks the given notifications read (all of mine when ids is empty).
+impl mark_notifications_read(ids: list[str]) -> int {
+    me = _my_root_id();
+    changed = 0;
+    for n in [root.shared-->][?:Notification] {
+        if n.recipient_root == me and not n.read and (len(ids) == 0 or jid(n) in ids) {
+            n.read = True;
+            changed += 1;
+        }
+    }
+    return changed;
 }
