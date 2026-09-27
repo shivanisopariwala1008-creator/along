@@ -379,7 +379,8 @@ button.avatar { cursor: pointer; }
 /* Google Maps variant of the map panel */
 .map-canvas.google { background: #e9eee7; }
 .map-canvas.google .gmap { position: absolute; inset: 0; }
-.map-canvas.google .result-marker { position: relative; left: auto; top: auto; margin: 0 0 12px; }
+.map-canvas.google .result-marker { display: grid; place-items: center; position: relative; left: auto; top: auto; margin: 0 0 12px; }
+.map-canvas.google .trip-end { display: grid; }
 .map-canvas.google .trip-end { position: relative; margin: 0; }
 .map-canvas.google .traffic-legend, .map-canvas.google .type-legend { z-index: 2; }
 .dash-swatch { width: 16px; height: 0; border-top: 3px dashed var(--al-green-dark); }
@@ -387,3 +388,44 @@ button.avatar { cursor: pointer; }
 .dash-swatch.purple { border-color: var(--al-purple); }
 .dash-swatch.amber { border-color: var(--al-amber); }
 .chat-details-map .map-canvas.google .traffic-legend, .chat-details-map .map-canvas.google .type-legend { display: none; }
+
+/* Google Places location picker */
+.place-field { position: relative; }
+.place-box { height: 47px; border: 1px solid var(--al-line); border-radius: 10px; display: flex; align-items: center; padding: 0 12px; background: var(--al-surface); transition: .2s; }
+.place-box:focus-within { border-color: var(--al-green); box-shadow: 0 0 0 3px var(--al-green-soft); }
+.place-box.picked { border-color: #b6d9c3; background: #f8fcf9; }
+.place-box svg { color: var(--al-muted); flex: 0 0 auto; }
+.place-box .picked-check { color: var(--al-green); }
+.place-box input { border: 0; outline: 0; width: 100%; padding: 0 9px; background: transparent; color: var(--al-ink); font-size: 13px; }
+.place-menu { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; margin: 0; padding: 6px; list-style: none; background: white; border: 1px solid var(--al-line); border-radius: 12px; box-shadow: var(--al-shadow); max-height: 300px; overflow-y: auto; }
+.place-menu li { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; cursor: pointer; }
+.place-menu li svg { color: var(--al-green); flex: 0 0 auto; }
+.place-menu li span { display: flex; flex-direction: column; min-width: 0; }
+.place-menu li strong { font-size: 13px; }
+.place-menu li small { color: var(--al-muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.place-menu li:hover, .place-menu li.active { background: var(--al-surface-soft); }
+.place-menu li.place-attribution { cursor: default; justify-content: flex-end; color: var(--al-muted); font-size: 10px; padding: 4px 8px; }
+.place-menu li.place-attribution:hover { background: transparent; }
+.place-error { display: block; color: #a63c34; font-size: 11px; margin-top: 5px; }
+.route-fields .place-field > span { display: block; font-weight: 700; font-size: 12px; margin-bottom: 7px; }
+
+.round-trip-toggle { margin: 18px 0 0; }
+.more-options { width: 100%; border: 1px dashed var(--al-line); background: var(--al-surface); border-radius: 14px; padding: 14px 18px; display: flex; align-items: center; gap: 12px; cursor: pointer; text-align: left; color: var(--al-ink); }
+.more-options:hover { border-color: var(--al-green); }
+.more-options > svg:first-child { color: var(--al-green); }
+.more-options span { display: flex; flex-direction: column; font-size: 13px; }
+.more-options small { color: var(--al-muted); font-size: 11px; margin-top: 2px; }
+.more-chevron { margin-left: auto; color: var(--al-muted); transition: transform .2s; }
+.more-chevron.open { transform: rotate(90deg); }
+
+/* Profile: your posted journeys */
+.journey-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 22px; }
+.journey-row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--al-line); border-radius: 12px; background: white; cursor: pointer; text-align: left; color: var(--al-ink); }
+.journey-row:hover { border-color: var(--al-green); box-shadow: var(--al-shadow-small); }
+.journey-row > span:nth-child(2) { display: flex; flex-direction: column; min-width: 0; }
+.journey-row strong { font-size: 12px; }
+.journey-row small { color: var(--al-muted); font-size: 10px; margin-top: 3px; }
+.journey-row em { margin-left: auto; font-style: normal; color: var(--al-green); font-size: 10px; font-weight: 700; display: flex; align-items: center; gap: 2px; white-space: nowrap; }
+.flow-badge.small { width: 34px; height: 34px; margin: 0; border-radius: 10px; flex: 0 0 auto; }
+.journeys-empty { color: var(--al-muted); font-size: 11px; }
+.link-button { border: 0; background: none; padding: 0; color: var(--al-green); font-weight: 700; cursor: pointer; font-size: inherit; }

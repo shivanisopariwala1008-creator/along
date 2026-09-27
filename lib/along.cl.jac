@@ -197,10 +197,11 @@ def:pub trip_timing(t: TripView | None) -> str {
         return "";
     }
     day = "Weekdays" if t.recurring else (fmt_date(t.travel_date) or "One time");
+    trip = " · Round trip" if t.round_trip else "";
     if t.time_preference == "depart_at" {
-        return day + " · Leave at " + fmt_time(t.departure_time);
+        return day + " · Leave at " + fmt_time(t.departure_time) + trip;
     }
-    return day + " · Arrive by " + fmt_time(t.arrival_deadline);
+    return day + " · Arrive by " + fmt_time(t.arrival_deadline) + trip;
 }
 
 # ---------------------------------------------------------------------------

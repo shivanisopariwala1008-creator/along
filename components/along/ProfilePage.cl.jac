@@ -4,11 +4,12 @@ what other travelers see. You never see your own score or who rated you."""
 import from "@jac/runtime" { useNavigate, jacLogout }
 import from .Icon { Icon }
 import from .AppHeader { AppHeader }
-import from ...lib.along { initials, plural }
-sv import from ...services.along { get_my_profile, update_profile_details, ProfileView }
+import from ...lib.along { initials, plural, flow_info, flow_of_trip, short_place, trip_timing }
+sv import from ...services.along { get_my_profile, update_profile_details, get_my_trips, ProfileView, TripView }
 
 def:pub ProfilePage() -> JsxElement {
     has profile: ProfileView | None = None,
+        trips: list[TripView] = [],
         editing: bool = False,
         name_draft: str = "",
         region_draft: str = "",
@@ -20,6 +21,7 @@ def:pub ProfilePage() -> JsxElement {
 
     async can with entry {
         profile = await get_my_profile();
+        trips = await get_my_trips();
     }
 
     def start_edit(e: MouseEvent) {
@@ -117,6 +119,26 @@ def:pub ProfilePage() -> JsxElement {
                             <strong>Your view</strong>
                             <p>You will never see your own aggregate rating or who rated you. Other people see a rating only after you receive one.</p>
                         </div>
+                    </div>
+                    <h3>Your journeys</h3>
+                    {if len(trips) == 0 {
+                        <p key="none" className="journeys-empty">
+                            Nothing posted yet. <button className="link-button" onClick={lambda (e: MouseEvent) { nav("/journey/ride"); }}>Post a journey</button>
+                        </p>
+                    }}
+                    <div className="journey-list">
+                        {for t in trips {
+                            <button key={t.id} className="journey-row" onClick={lambda (e: MouseEvent) { nav("/results?tripId=" + t.id); }}>
+                                <span className={"flow-badge small " + flow_info(flow_of_trip(t))["accent"]}>
+                                    <Icon name={flow_info(flow_of_trip(t))["icon"]} size={16} />
+                                </span>
+                                <span>
+                                    <strong>{short_place(t.origin_name) + " → " + short_place(t.destination_name)}</strong>
+                                    <small>{flow_info(flow_of_trip(t))["title"] + " · " + trip_timing(t)}</small>
+                                </span>
+                                <em>View matches <Icon name="chevron" size={14} /></em>
+                            </button>
+                        }}
                     </div>
                     <h3>Trust &amp; verification</h3>
                     <div className="settings-list">

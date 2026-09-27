@@ -77,7 +77,8 @@ node Trip {
         gender_pref: str = "No preference",
         demo_rating: float = 0.0,             # seeded reputation for demo users only
         demo_reviews: int = 0,
-        route_json: str = "";                 # cached Google road route, see get_trip_route
+        route_json: str = "",                 # cached Google road route, see get_trip_route
+        round_trip: bool = False;
 }
 
 node Location {
@@ -188,7 +189,7 @@ obj TripView {
         recurring: bool = True, smoking: bool = False,
         origin_lat: float = 0.0, origin_lng: float = 0.0,
         destination_lat: float = 0.0, destination_lng: float = 0.0,
-        owner_rating: float = 0.0, owner_reviews: int = 0;
+        owner_rating: float = 0.0, owner_reviews: int = 0, round_trip: bool = False;
 }
 
 obj MatchCardView {
@@ -311,7 +312,11 @@ def create_journey(
     mode: str, role: str, origin_name: str, destination_name: str, travel_date: str,
     time_preference: str, time: str, recurring: bool, flexible_minutes: int,
     seats_available: int, people: int, max_detour_minutes: int, pickup_distance: str,
-    vehicle: str, moving_help: bool, age_pref: str, gender_pref: str, notes: str
+    vehicle: str, moving_help: bool, age_pref: str, gender_pref: str, notes: str,
+    # Exact coordinates from the Google Places dropdown; 0 = look the name up.
+    origin_lat: float = 0.0, origin_lng: float = 0.0,
+    destination_lat: float = 0.0, destination_lng: float = 0.0,
+    round_trip: bool = False
 ) -> str;
 
 def get_my_trip(trip_id: str) -> TripView | None;

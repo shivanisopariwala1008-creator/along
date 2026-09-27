@@ -1,12 +1,15 @@
-"""JourneyForm — Figma step 1: route, timing, (rental) vehicle, and match
-preferences. One form serves all four journey types; submitting posts a Trip
-to the graph and hands off to the results screen."""
+"""JourneyForm — step 1 for all four journey types. Up front: pickup, dropoff
+(picked from a Google Places dropdown when a Maps key is configured) and
+round trip. Timing, vehicle and match preferences sit under "More options"
+with sensible defaults. Submitting posts a Trip and opens the results."""
 
 import from "@jac/runtime" { useNavigate, useParams, Navigate }
+import from "@vis.gl/react-google-maps" { APIProvider }
 import from .Icon { Icon }
 import from .AppHeader { AppHeader }
+import from .PlaceInput { PlaceInput }
 import from ...lib.along { flow_info, mode_of, role_of, today_iso }
-sv import from ...services.along { create_journey }
+sv import from ...services.along { create_journey, get_maps_config, MapsConfigView }
 
 glob VEHICLES: list[list[str]] = [
     ["Compact", "4 people · light luggage"], ["Sedan", "5 people · medium luggage"],
@@ -29,8 +32,16 @@ def:pub JourneyRoute() -> JsxElement {
 def:pub JourneyForm(kind: str) -> JsxElement {
     info = flow_info(kind);
 
-    has origin_name: str = info["origin"],
-        destination_name: str = info["destination"],
+    has origin_name: str = "",
+        destination_name: str = "",
+        origin_lat: float = 0.0,
+        origin_lng: float = 0.0,
+        destination_lat: float = 0.0,
+        destination_lng: float = 0.0,
+        round_trip: bool = False,
+        show_more: bool = False,
+        places_down: bool = False,
+        maps_key: str = "",
         recurring: bool = kind == "ride" or kind == "buddy",
         travel_date: str = today_iso(),
         time_preference: str = "depart_at" if kind == "buddy" or kind == "cab" else "arrive_by",
@@ -46,16 +57,57 @@ def:pub JourneyForm(kind: str) -> JsxElement {
 
     nav = useNavigate();
 
+    async can with entry {
+        cfg: MapsConfigView | None = await get_maps_config();
+        if cfg {
+            maps_key = cfg.api_key;
+        }
+    }
+
     def swap(e: MouseEvent) {
         a = origin_name;
+        a_lat = origin_lat;
+        a_lng = origin_lng;
         origin_name = destination_name;
+        origin_lat = destination_lat;
+        origin_lng = destination_lng;
         destination_name = a;
+        destination_lat = a_lat;
+        destination_lng = a_lng;
+    }
+
+    # Typing after a pick invalidates it until another suggestion is chosen.
+    def type_origin(v: str) {
+        origin_name = v;
+        origin_lat = 0.0;
+        origin_lng = 0.0;
+    }
+    def type_destination(v: str) {
+        destination_name = v;
+        destination_lat = 0.0;
+        destination_lng = 0.0;
+    }
+    def pick_origin(name: str, lat: float, lng: float) {
+        origin_name = name;
+        origin_lat = lat;
+        origin_lng = lng;
+    }
+    def pick_destination(name: str, lat: float, lng: float) {
+        destination_name = name;
+        destination_lat = lat;
+        destination_lng = lng;
     }
 
     async def handle_submit(e: FormEvent) {
         e.preventDefault();
         if not origin_name.strip() or not destination_name.strip() {
-            error = "Please fill in where you’re starting and where you’re headed.";
+            error = "Please select a pickup and a dropoff location.";
+            return;
+        }
+        # Require a dropdown pick while Google place search works; if it's down,
+        # accept typed names and let the server geocode them.
+        if maps_key and not places_down and (not origin_lat or not destination_lat) {
+            error = "Please choose the pickup and dropoff from the suggestions list.";
             return;
         }
         if not recurring and not travel_date {
@@ -82,7 +134,8 @@ def:pub JourneyForm(kind: str) -> JsxElement {
             trip_id = await create_journey(
                 mode, role, origin_name, destination_name, travel_date, time_preference, time,
                 recurring, flexible_minutes, seats_available, people, max_detour_minutes,
-                pickup_distance, vehicle, moving_help, age_pref, gender_pref, notes
+                pickup_distance, vehicle, moving_help, age_pref, gender_pref, notes,
+                origin_lat, origin_lng, destination_lat, destination_lng, round_trip
             );
             nav("/results?tripId=" + trip_id);
         } except Exception as ex {
@@ -116,110 +169,138 @@ def:pub JourneyForm(kind: str) -> JsxElement {
                     </div>
                     <div className="route-fields">
                         <span className="route-rail"><i /><i /></span>
-                        <TextField
-                            label={"Point A" if kind == "cab" else ("Rental pickup area" if kind == "rental" else "From")}
-                            value={origin_name} icon="pin" placeholder="City or area in Michigan"
-                            onValue={lambda (v: str) { origin_name = v; }}
-                        />
-                        <button type="button" className="swap-btn" aria-label="Swap locations" onClick={swap}><Icon name="swap" /></button>
-                        <TextField
-                            label={"Point B" if kind == "cab" else ("Destination or travel area" if kind == "rental" else "To")}
-                            value={destination_name} icon="pin" placeholder="City or area in Michigan"
-                            onValue={lambda (v: str) { destination_name = v; }}
-                        />
-                    </div>
-                </section>
-
-                <section className="form-card">
-                    <div className="form-card-title">
-                        <span>2</span>
-                        <div><h2>Timing &amp; flexibility</h2><p>Tell us what works, and we’ll find the best overlap.</p></div>
-                    </div>
-                    <div className="field-grid">
-                        <SelectField
-                            label="Journey type" value={"Recurring" if recurring else "One time"}
-                            options={["One time", "Recurring"]}
-                            onValue={lambda (v: str) { recurring = v == "Recurring"; }}
-                        />
-                        {if recurring {
-                            <TextField key="days" label="Days" value="Weekdays (Mon–Fri)" icon="calendar" readOnly={True} onValue={lambda (v: str) { }} />
+                        {if maps_key {
+                            <APIProvider key="places" apiKey={maps_key}>
+                                <PlaceInput
+                                    label="Pickup" placeholder="Select a pickup location"
+                                    value={origin_name} picked={origin_lat != 0.0}
+                                    onType={type_origin} onPick={pick_origin}
+                                    onUnavailable={lambda { places_down = True; }}
+                                />
+                                <button type="button" className="swap-btn" aria-label="Swap locations" onClick={swap}><Icon name="swap" /></button>
+                                <PlaceInput
+                                    label="Dropoff" placeholder="Select a dropoff location"
+                                    value={destination_name} picked={destination_lat != 0.0}
+                                    onType={type_destination} onPick={pick_destination}
+                                    onUnavailable={lambda { places_down = True; }}
+                                />
+                            </APIProvider>
                         } else {
                             <TextField
-                                key="date" label={"Pickup date" if kind == "rental" else "Date"} value={travel_date}
-                                icon="calendar" inputType="date" onValue={lambda (v: str) { travel_date = v; }}
+                                key="from" label="Pickup" placeholder="Select a pickup location"
+                                value={origin_name} icon="pin" onValue={type_origin}
+                            />
+                            <button key="swap" type="button" className="swap-btn" aria-label="Swap locations" onClick={swap}><Icon name="swap" /></button>
+                            <TextField
+                                key="to" label="Dropoff" placeholder="Select a dropoff location"
+                                value={destination_name} icon="pin" onValue={type_destination}
                             />
                         }}
-                        <SelectField
-                            label="Time preference"
-                            value={"Arrive by" if time_preference == "arrive_by" else "Preferred departure"}
-                            options={["Preferred departure", "Arrive by"]}
-                            onValue={lambda (v: str) { time_preference = "arrive_by" if v == "Arrive by" else "depart_at"; }}
-                        />
-                        <TextField label="Time" value={time} icon="clock" inputType="time" onValue={lambda (v: str) { time = v; }} />
-                        {if kind != "cab" {
-                            <SelectField key="distance" label={distance_label} value={distance} options={DISTANCES} onValue={lambda (v: str) { distance = v; }} />
-                        }}
-                        <SelectField
-                            label={"Available seats" if kind == "buddy" else "Number of people"}
-                            value={_count_label(kind, count)}
-                            options={[_count_label(kind, n) for n in count_options]}
-                            onValue={lambda (v: str) { count = int(v.split(" ")[0]); }}
-                        />
                     </div>
+                    <label className="moving-toggle round-trip-toggle">
+                        <input type="checkbox" checked={round_trip} onChange={lambda (e: ChangeEvent) { round_trip = not round_trip; }} />
+                        <span><Icon name="swap" /></span>
+                        <div><strong>Round trip</strong><small>I’m also coming back the same way</small></div>
+                        <i />
+                    </label>
                 </section>
 
-                {if kind == "rental" {
-                    <section key="vehicle" className="form-card">
+                <button type="button" className="more-options" onClick={lambda (e: MouseEvent) { show_more = not show_more; }} aria-expanded={show_more}>
+                    <Icon name="tune" />
+                    <span><strong>More options</strong><small>{("Timing, vehicle and" if kind == "rental" else "Timing and") + " match preferences — optional"}</small></span>
+                    <Icon name="chevron" className={"more-chevron" + (" open" if show_more else "")} />
+                </button>
+                {if show_more {
+                    <section key="timing" className="form-card">
                         <div className="form-card-title">
-                            <span>3</span>
-                            <div><h2>Choose a vehicle type</h2><p>Capacity is a guide. You’ll confirm the vehicle together.</p></div>
+                            <span>2</span>
+                            <div><h2>Timing &amp; flexibility</h2><p>Tell us what works, and we’ll find the best overlap.</p></div>
                         </div>
-                        <label className="moving-toggle">
-                            <input type="checkbox" checked={moving_help} onChange={lambda (e: ChangeEvent) { moving_help = not moving_help; }} />
-                            <span><Icon name="key" /></span>
-                            <div><strong>I need help with moving</strong><small>Prioritize vehicles with more cargo space</small></div>
-                            <i />
-                        </label>
-                        <div className="vehicle-grid">
-                            {for v in VEHICLES {
-                                <button
-                                    type="button" key={v[0]}
-                                    className={"vehicle-card selected" if vehicle == v[0] else "vehicle-card"}
-                                    onClick={lambda (e: MouseEvent) { vehicle = v[0]; }}
-                                >
-                                    <span className={"vehicle-shape vehicle-" + v[0].lower().replace(" ", "-")}><Icon name="car" size={30} /></span>
-                                    <strong>{v[0]}</strong>
-                                    <small>{v[1]}</small>
-                                    {vehicle == v[0] and <b><Icon name="check" size={14} /></b>}
-                                </button>
+                        <div className="field-grid">
+                            <SelectField
+                                label="Journey type" value={"Recurring" if recurring else "One time"}
+                                options={["One time", "Recurring"]}
+                                onValue={lambda (v: str) { recurring = v == "Recurring"; }}
+                            />
+                            {if recurring {
+                                <TextField key="days" label="Days" value="Weekdays (Mon–Fri)" icon="calendar" readOnly={True} onValue={lambda (v: str) { }} />
+                            } else {
+                                <TextField
+                                    key="date" label={"Pickup date" if kind == "rental" else "Date"} value={travel_date}
+                                    icon="calendar" inputType="date" onValue={lambda (v: str) { travel_date = v; }}
+                                />
                             }}
+                            <SelectField
+                                label="Time preference"
+                                value={"Arrive by" if time_preference == "arrive_by" else "Preferred departure"}
+                                options={["Preferred departure", "Arrive by"]}
+                                onValue={lambda (v: str) { time_preference = "arrive_by" if v == "Arrive by" else "depart_at"; }}
+                            />
+                            <TextField label="Time" value={time} icon="clock" inputType="time" onValue={lambda (v: str) { time = v; }} />
+                            {if kind != "cab" {
+                                <SelectField key="distance" label={distance_label} value={distance} options={DISTANCES} onValue={lambda (v: str) { distance = v; }} />
+                            }}
+                            <SelectField
+                                label={"Available seats" if kind == "buddy" else "Number of people"}
+                                value={_count_label(kind, count)}
+                                options={[_count_label(kind, n) for n in count_options]}
+                                onValue={lambda (v: str) { count = int(v.split(" ")[0]); }}
+                            />
+                        </div>
+                    </section>
+
+                    if kind == "rental" {
+                        <section key="vehicle" className="form-card">
+                            <div className="form-card-title">
+                                <span>3</span>
+                                <div><h2>Choose a vehicle type</h2><p>Capacity is a guide. You’ll confirm the vehicle together.</p></div>
+                            </div>
+                            <label className="moving-toggle">
+                                <input type="checkbox" checked={moving_help} onChange={lambda (e: ChangeEvent) { moving_help = not moving_help; }} />
+                                <span><Icon name="key" /></span>
+                                <div><strong>I need help with moving</strong><small>Prioritize vehicles with more cargo space</small></div>
+                                <i />
+                            </label>
+                            <div className="vehicle-grid">
+                                {for v in VEHICLES {
+                                    <button
+                                        type="button" key={v[0]}
+                                        className={"vehicle-card selected" if vehicle == v[0] else "vehicle-card"}
+                                        onClick={lambda (e: MouseEvent) { vehicle = v[0]; }}
+                                    >
+                                        <span className={"vehicle-shape vehicle-" + v[0].lower().replace(" ", "-")}><Icon name="car" size={30} /></span>
+                                        <strong>{v[0]}</strong>
+                                        <small>{v[1]}</small>
+                                        {vehicle == v[0] and <b><Icon name="check" size={14} /></b>}
+                                    </button>
+                                }}
+                            </div>
+                        </section>
+                    }
+
+                    <section key="prefs" className="form-card">
+                        <div className="form-card-title">
+                            <span>{step_prefs}</span>
+                            <div><h2>Match preferences</h2><p>Every option includes “No preference.”</p></div>
+                        </div>
+                        <div className="field-grid">
+                            <SelectField
+                                label="Age preference" value={age_pref}
+                                options={["No preference", "18–25", "26–40", "41–60", "60+"]}
+                                onValue={lambda (v: str) { age_pref = v; }}
+                            />
+                            <SelectField
+                                label="Gender preference" value={gender_pref}
+                                options={["No preference", "Women", "Men", "Non-binary"]}
+                                onValue={lambda (v: str) { gender_pref = v; }}
+                            />
+                        </div>
+                        <div className="privacy-note">
+                            <Icon name="shield" />
+                            <span><strong>Your privacy comes first</strong><small>Exact addresses and identity stay private until both people agree.</small></span>
                         </div>
                     </section>
                 }}
-
-                <section className="form-card">
-                    <div className="form-card-title">
-                        <span>{step_prefs}</span>
-                        <div><h2>Match preferences</h2><p>Every option includes “No preference.”</p></div>
-                    </div>
-                    <div className="field-grid">
-                        <SelectField
-                            label="Age preference" value={age_pref}
-                            options={["No preference", "18–25", "26–40", "41–60", "60+"]}
-                            onValue={lambda (v: str) { age_pref = v; }}
-                        />
-                        <SelectField
-                            label="Gender preference" value={gender_pref}
-                            options={["No preference", "Women", "Men", "Non-binary"]}
-                            onValue={lambda (v: str) { gender_pref = v; }}
-                        />
-                    </div>
-                    <div className="privacy-note">
-                        <Icon name="shield" />
-                        <span><strong>Your privacy comes first</strong><small>Exact addresses and identity stay private until both people agree.</small></span>
-                    </div>
-                </section>
-
                 {error and <p className="form-error" role="alert">{error}</p>}
 
                 <div className="form-footer">

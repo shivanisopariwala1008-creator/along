@@ -26,9 +26,13 @@ def:pub AppHeader(progress: bool = False) -> JsxElement {
                     avatar = initials(profile.display_name or profile.rider_handle);
                 }
             } except Exception as e {
-                # Expired/invalid token: treat as logged out.
-                jacLogout();
-                logged_in = False;
+                # Only an explicit auth rejection ends the session; a blip
+                # (network, server restart) must not log you out.
+                message: str = str(e);
+                if "401" in message or "UNAUTHORIZED" in message.upper() or "INVALID TOKEN" in message.upper() {
+                    jacLogout();
+                    logged_in = False;
+                }
             }
         }
     }

@@ -17,7 +17,8 @@ def:pub GoogleMapView(
     info = flow_info(kind);
     lines: list[dict] = [];
     if my_route is not None and len(my_route.points) > 1 {
-        lines = lines + [{"points": my_route.points, "color": "#176b45", "dashed": False}];
+        # Dark ink so the route stands out against Google's green "clear" traffic.
+        lines = lines + [{"points": my_route.points, "color": "#17211a", "dashed": False}];
     }
     if other_route is not None and len(other_route.points) > 1 {
         lines = lines + [{"points": other_route.points, "color": _accent_hex(info["accent"]), "dashed": True}];
@@ -90,6 +91,12 @@ def:pub RouteLines(lines: list[dict], signature: str) -> JsxElement {
                     **options, "strokeOpacity": 0,
                     "icons": [{"icon": {"path": "M 0,-1 0,1", "strokeOpacity": 1, "scale": 3}, "offset": "0", "repeat": "14px"}]
                 };
+            }
+            if not line["dashed"] {
+                # White casing underneath keeps the line readable over busy roads.
+                casing = new(g.maps.Polyline, {"path": path, "strokeColor": "#ffffff", "strokeWeight": 9, "strokeOpacity": 1});  # jac:ignore[E1053]
+                casing.setMap(gmap);
+                drawn.append(casing);
             }
             poly = new(g.maps.Polyline, options);  # jac:ignore[E1053]
             poly.setMap(gmap);

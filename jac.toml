@@ -51,7 +51,7 @@ lib_imports = ["import tailwindcss from '@tailwindcss/vite'"]
 
 [plugins.scale.jwt]
 secret = "${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me}"
-exp_delta_days = 7
+exp_delta_days = 30
 
 [plugins.scale.admin]
 default_password = "${ADMIN_PASSWORD:-changeme}"

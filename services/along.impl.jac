@@ -497,13 +497,16 @@ impl create_journey(
     mode: str, role: str, origin_name: str, destination_name: str, travel_date: str,
     time_preference: str, time: str, recurring: bool, flexible_minutes: int,
     seats_available: int, people: int, max_detour_minutes: int, pickup_distance: str,
-    vehicle: str, moving_help: bool, age_pref: str, gender_pref: str, notes: str
+    vehicle: str, moving_help: bool, age_pref: str, gender_pref: str, notes: str,
+    origin_lat: float = 0.0, origin_lng: float = 0.0,
+    destination_lat: float = 0.0, destination_lng: float = 0.0,
+    round_trip: bool = False
 ) -> str {
     me = _me();
     clean_mode = mode if mode in ["ride", "rental", "cab"] else "ride";
     clean_role = ("DRIVER" if role == "DRIVER" else "RIDER") if clean_mode == "ride" else "PEER";
-    origin_coords = _town_coords(origin_name);
-    dest_coords = _town_coords(destination_name);
+    origin_coords = [origin_lat, origin_lng] if (origin_lat and origin_lng) else _town_coords(origin_name);
+    dest_coords = [destination_lat, destination_lng] if (destination_lat and destination_lng) else _town_coords(destination_name);
 
     # Scoring compares departures, so derive one from an arrive-by time.
     km = _haversine_km(origin_coords[0], origin_coords[1], dest_coords[0], dest_coords[1]);
@@ -532,6 +535,7 @@ impl create_journey(
     trip.pickup_distance = pickup_distance.strip()[:30];
     trip.age_pref = age_pref.strip()[:30] or "No preference";
     trip.gender_pref = gender_pref.strip()[:30] or "No preference";
+    trip.round_trip = round_trip;
     me +>:Posts:+> trip;
 
     # Make sure there is always someone to match with in the demo.
@@ -590,7 +594,7 @@ def _trip_view(t: Trip) -> TripView {
         recurring=t.recurring, smoking=_preference_of(t).smoking,
         origin_lat=t.origin_lat, origin_lng=t.origin_lng,
         destination_lat=t.destination_lat, destination_lng=t.destination_lng,
-        owner_rating=rating[0], owner_reviews=rating[1]
+        owner_rating=rating[0], owner_reviews=rating[1], round_trip=t.round_trip
     );
 }
 

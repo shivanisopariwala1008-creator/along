@@ -201,6 +201,9 @@ def _preference_chips(t: TripView | None) -> list[str] {
     if t.recurring {
         chips = chips + ["Weekday commute"];
     }
+    if t.round_trip {
+        chips = chips + ["Round trip"];
+    }
     if t.flexible_minutes > 0 {
         chips = chips + ["Flexible ±" + str(t.flexible_minutes) + " min"];
     }
