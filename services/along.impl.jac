@@ -679,6 +679,8 @@ def _why_text(m: Match, mine: Trip | None, other: Trip | None) -> str {
     return f"Similar timing and a destination near {ot.destination_name.split(',')[0]}; their start is {near} yours.";
 }
 
+glob AGENT_ORDER: list[str] = ["Route Scout", "Schedule Agent", "Trust Agent", "Cost Agent", "Coordinator"];
+
 def _match_to_card(m: Match) -> MatchCardView {
     rider_trip = _load_trip(m.rider_trip_id);
     driver_trip = _load_trip(m.driver_trip_id);
@@ -696,7 +698,11 @@ def _match_to_card(m: Match) -> MatchCardView {
         other_trip=_trip_view(other) if other is not None else None,
         mode=m.mode, fit_label=_fit_label(m), why=_why_text(m, mine, other),
         other_handle=m.driver_handle if i_am_rider else m.rider_handle,
-        has_conversation=_find_conversation(m) is not None
+        has_conversation=_find_conversation(m) is not None,
+        agent_notes=[
+            AgentNoteView(agent=name, note=m.agent_notes[name])
+            for name in AGENT_ORDER if name in m.agent_notes
+        ]
     );
 }
 
@@ -718,74 +724,225 @@ def _impact_record() -> ImpactRecord {
     return rec;
 }
 
-impl run_matching(trip_id: str) -> list[MatchCardView] {
-    origin = _load_trip(trip_id);
-    me = _my_root_id();
-    if origin is None or (origin as Trip).owner_root != me {
-        return [];   # you can only run matching for your own trip
-    }
-    o = origin as Trip;
-    # Rides pair opposite roles; rentals and cabs pair peers of the same mode.
-    is_peer = o.role == "PEER";
-    wanted_role = "PEER" if is_peer else ("DRIVER" if o.role == "RIDER" else "RIDER");
+# ---------------------------------------------------------------------------
+# The matching agents (walkers declared in along.jac)
+# ---------------------------------------------------------------------------
 
+# Rides pair a rider with a driver; rentals/cabs pair peers, and the searcher
+# sits on the "rider" side of the Match.
+def _pair(me: Trip, other: Trip) -> tuple[Trip, Trip] {
+    if me.role == "RIDER" or me.role == "PEER" {
+        return (me, other);
+    }
+    return (other, me);
+}
+
+def _candidate_index(cands: list[Candidate]) -> dict[str, Candidate] {
+    return {c.trip_id: c for c in cands};
+}
+
+def _origin_trip(origin_id: str) -> Trip {
+    return _load_trip(origin_id) as Trip;
+}
+
+impl RouteScout.start {
+    visit [here-->][?:Trip];
+}
+
+impl RouteScout.inspect {
+    self.scanned += 1;
+    o = _origin_trip(self.origin_id);
+    wanted = "PEER" if o.role == "PEER" else ("DRIVER" if o.role == "RIDER" else "RIDER");
+    if not here.active or here.role != wanted or here.mode != o.mode
+        or jid(here) == self.origin_id or here.owner_root == self.my_root {
+        skip;
+    }
+    pair = _pair(o, here);
+    route = _route_overlap(pair[0], pair[1]);
+    c = Candidate(
+        trip_id=jid(here), handle=here.owner_handle, owner_root=here.owner_root,
+        route_score=route["overlap"] as int, detour=route["detour"] as int,
+        origin_gap_km=route["origin_gap"] as float, dest_gap_km=route["dest_gap"] as float
+    );
+    gap_mi: float = (route["origin_gap"] as float) * 0.621371;
+    c.notes["Route Scout"] = f"{c.route_score}% corridor overlap · starts {gap_mi:.1f} mi from you";
+    self.candidates.append(c);
+}
+
+impl ScheduleAgent.start {
+    visit [jobj(c.trip_id) for c in self.candidates];
+}
+
+impl ScheduleAgent.inspect {
+    c = _candidate_index(self.candidates).get(jid(here));
+    if c is None {
+        skip;
+    }
+    pair = _pair(_origin_trip(self.origin_id), here);
+    c.time_score = _time_compat(pair[0], pair[1]);
+    c.time_gap_min = abs(_minutes_of_day(pair[0].departure_time) - _minutes_of_day(pair[1].departure_time));
+    c.notes["Schedule Agent"] = f"{c.time_score}% schedule fit · departures {c.time_gap_min} min apart";
+}
+
+impl TrustAgent.start {
+    visit [jobj(c.trip_id) for c in self.candidates];
+}
+
+impl TrustAgent.inspect {
+    c = _candidate_index(self.candidates).get(jid(here));
+    if c is None {
+        skip;
+    }
+    pair = _pair(_origin_trip(self.origin_id), here);
+    c.preference_score = _preference_compat(_preference_of(pair[0]), _preference_of(pair[1]));
+    rep = _rating_summary(_ratee_key(here.owner_root, here.owner_handle), here.demo_rating, here.demo_reviews);
+    c.rating = rep[0] as float;
+    c.reviews = rep[1] as int;
+    # Reputation nudges the ranking a little; it never overrides a bad route.
+    if c.reviews >= 3 and c.rating >= 4.7 {
+        c.trust_bonus = 3;
+    } elif c.reviews >= 1 and c.rating >= 4.5 {
+        c.trust_bonus = 2;
+    } elif c.reviews >= 1 and c.rating < 3.5 {
+        c.trust_bonus = -6;
+    }
+    rep_text = f"★ {c.rating:.1f} from {c.reviews} review{'s' if c.reviews != 1 else ''}" if c.reviews else "New traveler, no reviews yet";
+    pref_text = "preferences compatible" if c.preference_score >= 90 else "some preference differences";
+    c.notes["Trust Agent"] = rep_text + " · " + pref_text;
+}
+
+impl CostAgent.start {
+    visit [jobj(c.trip_id) for c in self.candidates];
+}
+
+impl CostAgent.inspect {
+    c = _candidate_index(self.candidates).get(jid(here));
+    if c is None {
+        skip;
+    }
+    o = _origin_trip(self.origin_id);
+    pair = _pair(o, here);
+    cost = _cost_benefit(pair[0], pair[1], c.origin_gap_km, c.dest_gap_km);
+    c.cost_score = cost["score"] as int;
+    c.rider_savings = cost["rider_savings"] as float;
+    c.driver_contribution = cost["driver_contribution"] as float;
+    period = "a week" if pair[0].recurring else "per trip";
+    c.notes["Cost Agent"] = f"Saves about ${c.rider_savings:.0f} {period} vs. a private rideshare";
+}
+
+def _cand_overall(c: Candidate) -> int {
+    return c.overall;
+}
+
+impl Coordinator.decide {
+    o = _origin_trip(self.origin_id);
     existing: dict[str, Match] = {};
     for m in _my_matches() {
         existing[m.rider_trip_id + ":" + m.driver_trip_id] = m;
     }
-
-    # A. CandidateDiscovery: active, opposite-role trips from other users.
-    candidates = [
-        t for t in _public_trips()
-        if t.active and t.role == wanted_role and t.mode == o.mode
-        and jid(t) != trip_id and t.owner_root != me
-    ];
-
-    results: list[MatchCardView] = [];
-    for c in candidates {
-        # For peers the searcher sits on the "rider" side of the Match.
-        rider_trip = o if (o.role == "RIDER" or is_peer) else c;
-        driver_trip = c if (o.role == "RIDER" or is_peer) else o;
-        key = jid(rider_trip) + ":" + jid(driver_trip);
-        if key in existing {
-            if existing[key].status != "closed" {
-                results.append(_match_to_card(existing[key]));
-            }
+    for c in self.candidates {
+        base = _score_match(c.route_score, c.detour, c.time_score, c.preference_score, c.cost_score);
+        c.overall = max(1, min(99, base + c.trust_bonus));
+    }
+    ranked = sorted(self.candidates, key=_cand_overall, reverse=True);
+    for (i, c) in enumerate(ranked) {
+        c.notes["Coordinator"] = f"Ranked #{i + 1} of {len(ranked)} · {c.overall}% overall";
+        other = _load_trip(c.trip_id);
+        if other is None {
             continue;
         }
-
-        # B-E. Route overlap, time, preference and cost scoring
-        route = _route_overlap(rider_trip, driver_trip);
-        time_score = _time_compat(rider_trip, driver_trip);
-        pref_score = _preference_compat(_preference_of(rider_trip), _preference_of(driver_trip));
-        cost = _cost_benefit(rider_trip, driver_trip, route["origin_gap"] as float, route["dest_gap"] as float);
-        # G. MatchScoring
-        overall = _score_match(route["overlap"] as int, route["detour"] as int, time_score, pref_score, cost["score"] as int);
-
-        gap_miles: float = (route["origin_gap"] as float) * 0.621371;
+        pair = _pair(o, other as Trip);
+        rider_trip = pair[0];
+        driver_trip = pair[1];
+        key = jid(rider_trip) + ":" + jid(driver_trip);
+        gap_miles: float = c.origin_gap_km * 0.621371;
+        if key in existing {
+            m = existing[key];
+            if m.status == "closed" {
+                continue;   # declined matches stay out of the results
+            }
+            # Fresh evaluation: refresh the stored scores and notes.
+            m.overall_score = c.overall;
+            m.route_score = c.route_score;
+            m.time_score = c.time_score;
+            m.detour_minutes = c.detour;
+            m.preference_score = c.preference_score;
+            m.cost_benefit_score = c.cost_score;
+            m.estimated_rider_savings = c.rider_savings;
+            m.estimated_driver_contribution = c.driver_contribution;
+            m.pickup_gap_miles = float(f"{gap_miles:.1f}");
+            m.agent_notes = c.notes;
+            self.cards.append(_match_to_card(m));
+            continue;
+        }
         m = Match(
-            overall_score=overall, route_score=route["overlap"] as int, time_score=time_score,
-            detour_minutes=route["detour"] as int, preference_score=pref_score,
-            cost_benefit_score=cost["score"] as int, estimated_rider_savings=cost["rider_savings"] as float,
-            estimated_driver_contribution=cost["driver_contribution"] as float, status="suggested",
+            overall_score=c.overall, route_score=c.route_score, time_score=c.time_score,
+            detour_minutes=c.detour, preference_score=c.preference_score,
+            cost_benefit_score=c.cost_score, estimated_rider_savings=c.rider_savings,
+            estimated_driver_contribution=c.driver_contribution, status="suggested",
             rider_handle=rider_trip.owner_handle, driver_handle=driver_trip.owner_handle,
             rider_trip_id=jid(rider_trip), driver_trip_id=jid(driver_trip),
             rider_root=rider_trip.owner_root, driver_root=driver_trip.owner_root,
-            created_at=_now(), mode=o.mode,
-            pickup_gap_miles=float(f"{gap_miles:.1f}")
+            created_at=_now(), mode=o.mode, pickup_gap_miles=float(f"{gap_miles:.1f}"),
+            agent_notes=c.notes
         );
         root.shared ++> m;
         _share_with(m, c.owner_root, WritePerm);
-
         rec = _impact_record();
         rec.trips_matched += 1;
         rec.estimated_savings += m.estimated_rider_savings;
         rec.estimated_shared_miles += 38.5;
-
-        results.append(_match_to_card(m));
+        self.cards.append(_match_to_card(m));
     }
+}
 
-    return _sort_cards(results);
+impl run_agents(trip_id: str) -> AgentRunView {
+    origin = _load_trip(trip_id);
+    me = _my_root_id();
+    if origin is None or (origin as Trip).owner_root != me {
+        return AgentRunView();   # you can only run matching for your own trip
+    }
+    shared = root.shared;
+
+    scout = RouteScout(origin_id=trip_id, my_root=me);
+    shared spawn scout;
+    found = scout.candidates;
+    schedule = ScheduleAgent(origin_id=trip_id, candidates=found);
+    shared spawn schedule;
+    trust = TrustAgent(origin_id=trip_id, candidates=found);
+    shared spawn trust;
+    cost = CostAgent(origin_id=trip_id, candidates=found);
+    shared spawn cost;
+    coordinator = Coordinator(origin_id=trip_id, my_root=me, candidates=found);
+    shared spawn coordinator;
+
+    cards = _sort_cards(coordinator.cards);
+    k = len(found);
+    in_window = len([c for c in found if c.time_gap_min <= 20]);
+    rated = len([c for c in found if c.reviews > 0]);
+    best_saving: float = max([c.rider_savings for c in found]) if k else 0.0;
+    steps = [
+        AgentStepView(agent="Route Scout", role="Walks the journey graph for shared corridors",
+            looked_at=scout.scanned, kept=k,
+            summary=f"Walked {scout.scanned} journeys on the graph; {k} share your corridor"),
+        AgentStepView(agent="Schedule Agent", role="Lines up departure times and detours",
+            looked_at=k, kept=in_window,
+            summary=f"Checked {k} schedules; {in_window} leave within 20 minutes of you"),
+        AgentStepView(agent="Trust Agent", role="Weighs reviews and ride preferences",
+            looked_at=k, kept=rated,
+            summary=f"{rated} rated travelers, {k - rated} new to Along; preferences checked"),
+        AgentStepView(agent="Cost Agent", role="Estimates what each match saves",
+            looked_at=k, kept=k,
+            summary=f"Best split saves about ${best_saving:.0f}" if k else "No costs to compare yet"),
+        AgentStepView(agent="Coordinator", role="Combines every agent's score and ranks",
+            looked_at=k, kept=len(cards),
+            summary=(f"Ranked {len(cards)} matches; the best is {cards[0].overall_score}%") if len(cards) else "No matches to rank yet"),
+    ];
+    return AgentRunView(cards=cards, steps=steps);
+}
+
+impl run_matching(trip_id: str) -> list[MatchCardView] {
+    return run_agents(trip_id).cards;
 }
 
 impl get_match_results() -> list[MatchCardView] {

@@ -122,7 +122,8 @@ node Match {
         mode: str = "ride",
         pickup_gap_miles: float = -1.0,
         rider_rated: bool = False,
-        driver_rated: bool = False;
+        driver_rated: bool = False,
+        agent_notes: dict[str, str] = {};   # each matching agent's one-line finding
 }
 
 node Conversation {
@@ -195,6 +196,10 @@ obj TripView {
         owner_rating: float = 0.0, owner_reviews: int = 0, round_trip: bool = False;
 }
 
+obj AgentNoteView {
+    has agent: str = "", note: str = "";
+}
+
 obj MatchCardView {
     has id: str = "", overall_score: int = 0, route_score: int = 0, time_score: int = 0,
         detour_minutes: int = 0, preference_score: int = 0, cost_benefit_score: int = 0,
@@ -203,7 +208,8 @@ obj MatchCardView {
         # Caller-relative view: which trip is mine and which is the other person's.
         my_trip: TripView | None = None, other_trip: TripView | None = None,
         mode: str = "ride", fit_label: str = "", why: str = "",
-        other_handle: str = "", has_conversation: bool = False;
+        other_handle: str = "", has_conversation: bool = False,
+        agent_notes: list[AgentNoteView] = [];
 }
 
 obj MatchDetailView {
@@ -285,6 +291,64 @@ obj ImpactView {
 }
 
 # ---------------------------------------------------------------------------
+# Matching agents — five walkers that each do one job on the journey graph.
+# They pass one shared list of Candidates along; the Coordinator turns the
+# survivors into Match nodes. Every score stays deterministic.
+# ---------------------------------------------------------------------------
+
+obj Candidate {
+    has trip_id: str = "", handle: str = "", owner_root: str = "",
+        route_score: int = 0, detour: int = 0, origin_gap_km: float = 0.0, dest_gap_km: float = 0.0,
+        time_score: int = 0, time_gap_min: int = 0,
+        preference_score: int = 0, trust_bonus: int = 0, rating: float = 0.0, reviews: int = 0,
+        cost_score: int = 0, rider_savings: float = 0.0, driver_contribution: float = 0.0,
+        overall: int = 0, notes: dict[str, str] = {};
+}
+
+obj AgentStepView {
+    has agent: str = "", role: str = "", summary: str = "", looked_at: int = 0, kept: int = 0;
+}
+
+obj AgentRunView {
+    has cards: list[MatchCardView] = [], steps: list[AgentStepView] = [];
+}
+
+# Walks every journey hanging off the shared root; keeps the ones whose
+# role/mode fit and scores how much of the corridor they share.
+walker RouteScout {
+    has origin_id: str = "", my_root: str = "", scanned: int = 0,
+        candidates: list[Candidate] = [];
+    can start with Root entry;
+    can inspect with Trip entry;
+}
+
+# The other three specialists visit just the Route Scout's shortlist.
+walker ScheduleAgent {
+    has origin_id: str = "", candidates: list[Candidate] = [];
+    can start with Root entry;
+    can inspect with Trip entry;
+}
+
+walker TrustAgent {
+    has origin_id: str = "", candidates: list[Candidate] = [];
+    can start with Root entry;
+    can inspect with Trip entry;
+}
+
+walker CostAgent {
+    has origin_id: str = "", candidates: list[Candidate] = [];
+    can start with Root entry;
+    can inspect with Trip entry;
+}
+
+# Weighs every specialist's score, ranks, and writes/updates the Match nodes.
+walker Coordinator {
+    has origin_id: str = "", my_root: str = "", candidates: list[Candidate] = [],
+        cards: list[MatchCardView] = [];
+    can decide with Root entry;
+}
+
+# ---------------------------------------------------------------------------
 # Public endpoints (implemented in along.impl.jac)
 # ---------------------------------------------------------------------------
 
@@ -305,6 +369,9 @@ def create_trip(
 ) -> str;
 
 def run_matching(trip_id: str) -> list[MatchCardView];
+
+# Same as run_matching, plus each agent's report for the "how we searched" view.
+def run_agents(trip_id: str) -> AgentRunView;
 
 def get_match_results() -> list[MatchCardView];
 

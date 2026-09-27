@@ -145,6 +145,19 @@ def:pub MatchDetail(match_id: str) -> JsxElement {
                             </p>
                         }}
                     </div>
+                    {if len(card.agent_notes) > 0 {
+                        <div key="agents" className="detail-section">
+                            <h2>What each agent found</h2>
+                            <ol className="agent-notes">
+                                {for n in card.agent_notes {
+                                    <li key={n.agent}>
+                                        <b>{n.agent[:1]}</b>
+                                        <div><strong>{n.agent}</strong><p>{n.note}</p></div>
+                                    </li>
+                                }}
+                            </ol>
+                        </div>
+                    }}
                     <div className="detail-section">
                         <h2>Preferences</h2>
                         <div className="preference-chips">

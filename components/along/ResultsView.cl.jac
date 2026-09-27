@@ -14,7 +14,7 @@ import from ...lib.along {
     flow_info, flow_of_trip, short_place, initials, rating_text, has_rating,
     when_text, meta_text, trip_timing
 }
-sv import from ...services.along { run_matching, get_match_results, get_my_trip, TripView, MatchCardView }
+sv import from ...services.along { run_agents, get_match_results, get_my_trip, TripView, MatchCardView, AgentRunView, AgentStepView }
 
 # Keyed on the URL so /results?tripId=… and /matches never share stale state.
 def:pub ResultsRoute() -> JsxElement {
@@ -39,6 +39,8 @@ def:pub ResultsView() -> JsxElement {
         # searching -> revealing -> ready: drives the map/list search animation.
         phase: str = "searching" if trip_id else "ready",
         step: int = 0,
+        agent_steps: list[AgentStepView] = [],
+        report_open: bool = False,
         ticks: Ref[int] = Ref(0);
 
     nav = useNavigate();
@@ -50,7 +52,9 @@ def:pub ResultsView() -> JsxElement {
         try {
             if trip_id {
                 my_trip = await get_my_trip(trip_id);
-                found = await run_matching(trip_id);
+                run: AgentRunView = await run_agents(trip_id);
+                found = run.cards;
+                agent_steps = run.steps;
                 # Let the search animation play for a beat even when matching is instant.
                 elapsed: float = new(Date).getTime() - started;
                 if elapsed < SEARCH_MIN_MS {
@@ -177,6 +181,9 @@ def:pub ResultsView() -> JsxElement {
                             }}
                         </div>
                     } else {
+                        if len(agent_steps) > 0 {
+                            <AgentReport key="report" steps={agent_steps} open={report_open} onToggle={lambda { report_open = not report_open; }} />
+                        }
                         <div key="cards" className={"cards" + (" revealing" if phase == "revealing" else "")}>
                             {for (i, c) in enumerate(shown) {
                                 <ResultCard
@@ -199,12 +206,13 @@ def:pub ResultsView() -> JsxElement {
 
 glob SEARCH_MIN_MS: float = 2600.0,
      REVEAL_STEP_MS: float = 420.0,
+     # The five matching agents (walkers on the server), in the order they run.
      SEARCH_STEPS: list[list[str]] = [
-         ["route", "Reading your route"],
-         ["search", "Scanning journeys nearby"],
-         ["clock", "Comparing schedules & detours"],
-         ["shield", "Checking preferences & trust"],
-         ["star", "Scoring your best matches"],
+         ["Route Scout", "walking the journey graph"],
+         ["Schedule Agent", "lining up departure times"],
+         ["Trust Agent", "weighing reviews & preferences"],
+         ["Cost Agent", "estimating what you'd save"],
+         ["Coordinator", "ranking your best matches"],
      ];
 
 async def _sleep(ms: float) -> None {
@@ -217,13 +225,13 @@ def:pub SearchSteps(step: int) -> JsxElement {
     active = min(step, len(SEARCH_STEPS) - 1);
     return <div className="search-steps" role="status" aria-live="polite">
         <div className="search-orb"><span /><span /><span /><Icon name="map" size={26} /></div>
-        <h3>Along is exploring the map</h3>
-        <p>Walking the journey graph for people heading your way.</p>
+        <h3>Along's agents are on it</h3>
+        <p>Five agents walk the journey graph for people heading your way.</p>
         <ol>
             {for (i, s) in enumerate(SEARCH_STEPS) {
                 <li key={s[0]} className={"done" if i < active else ("active" if i == active else "")}>
                     <span className="step-dot">{(<Icon name="check" size={13} />) if i < active else <span className="step-num">{str(i + 1)}</span>}</span>
-                    {s[1]}
+                    <span><strong>{s[0]}</strong>{" · " + s[1]}</span>
                 </li>
             }}
         </ol>
@@ -304,4 +312,38 @@ def:pub ResultCard(
             <button className="btn btn-primary" onClick={message}>Message <Icon name="chat" /></button>
         </div>
     </article>;
+}
+
+# What each agent did on this search — collapsed to one line by default.
+def:pub AgentReport(steps: list[AgentStepView], open: bool, onToggle: Callable[[], None]) -> JsxElement {
+    scanned = steps[0].looked_at if len(steps) > 0 else 0;
+    ranked = steps[len(steps) - 1].kept if len(steps) > 0 else 0;
+    return <section className={"agent-report" + (" open" if open else "")}>
+        <button className="agent-report-head" onClick={lambda (e: MouseEvent) { onToggle(); }} aria-expanded={open}>
+            <span className="agent-stack">
+                {for (i, s) in enumerate(steps) {
+                    <i key={s.agent} style={{"zIndex": str(10 - i)}}>{s.agent[:1]}</i>
+                }}
+            </span>
+            <span>
+                <strong>{str(len(steps)) + " agents searched " + str(scanned) + " journeys"}</strong>
+                <small>{str(ranked) + " matches ranked · see how"}</small>
+            </span>
+            <Icon name="chevron" className={"more-chevron" + (" open" if open else "")} />
+        </button>
+        {if open {
+            <ol key="steps">
+                {for s in steps {
+                    <li key={s.agent}>
+                        <b>{s.agent[:1]}</b>
+                        <div>
+                            <strong>{s.agent}</strong><small>{s.role}</small>
+                            <p>{s.summary}</p>
+                        </div>
+                        <em>{str(s.kept) + " / " + str(s.looked_at)}</em>
+                    </li>
+                }}
+            </ol>
+        }}
+    </section>;
 }
