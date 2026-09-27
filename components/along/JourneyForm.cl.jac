@@ -49,7 +49,7 @@ def:pub JourneyForm(route_kind: str) -> JsxElement {
         destination_lat: float = 0.0,
         destination_lng: float = 0.0,
         round_trip: bool = False,
-        show_more: bool = False,
+        show_more: bool = True,        # timing is always shown (it matters for every match)
         places_down: bool = False,
         return_date: str = "",
         space_needed: str = "Boxes + small furniture",
@@ -389,7 +389,7 @@ def:pub JourneyForm(route_kind: str) -> JsxElement {
                         </div>
                         <div className="field-grid">
                             <TextField label="Pickup date" value={travel_date} icon="calendar" inputType="date" onValue={lambda (v: str) { travel_date = v; }} />
-                            <TextField label="Pickup time" value={time} icon="clock" inputType="time" onValue={lambda (v: str) { time = v; }} />
+                            <TimeField label="Pickup time" value={time} onValue={lambda (v: str) { time = v; }} />
                             <TextField label="Return date" value={return_date} icon="calendar" inputType="date" onValue={lambda (v: str) { return_date = v; }} />
                             <SelectField
                                 label="People sharing the rental" value={_count_label(kind, count)}
@@ -464,11 +464,6 @@ def:pub JourneyForm(route_kind: str) -> JsxElement {
                     </div>
                 </section>
 
-                {kind != "rental" and <button type="button" className="more-options" onClick={lambda (e: MouseEvent) { show_more = not show_more; }} aria-expanded={show_more}>
-                    <Icon name="tune" />
-                    <span><strong>More options</strong><small>Timing and number of people — optional</small></span>
-                    <Icon name="chevron" className={"more-chevron" + (" open" if show_more else "")} />
-                </button>}
                 {if show_more {
                     if kind != "rental" {
                     <section key="timing" className="form-card">
@@ -496,7 +491,7 @@ def:pub JourneyForm(route_kind: str) -> JsxElement {
                                 options={["Preferred departure", "Arrive by"]}
                                 onValue={lambda (v: str) { time_preference = "arrive_by" if v == "Arrive by" else "depart_at"; }}
                             />
-                            <TextField label="Time" value={time} icon="clock" inputType="time" onValue={lambda (v: str) { time = v; }} />
+                            <TimeField label={"Arrive by" if time_preference == "arrive_by" else "Leave at"} value={time} onValue={lambda (v: str) { time = v; }} />
                             {if kind != "cab" {
                                 <SelectField key="distance" label={distance_label} value={distance} options={DISTANCES} onValue={lambda (v: str) { distance = v; }} />
                             }}
@@ -547,6 +542,44 @@ def:pub TextField(
         <div>
             {icon and <Icon name={icon} />}
             <input type={inputType} value={value} onChange={handle} placeholder={placeholder} readOnly={readOnly} />
+        </div>
+    </label>;
+}
+
+# "7:15 AM" for "07:15".
+def _time_label(hhmm: str) -> str {
+    parts = hhmm.split(":");
+    if len(parts) < 2 {
+        return hhmm;
+    }
+    h = int(parts[0]);
+    suffix = "AM" if h < 12 else "PM";
+    h12 = h % 12;
+    return str(12 if h12 == 0 else h12) + ":" + parts[1] + " " + suffix;
+}
+
+# A time dropdown in 15-minute steps (plus the current value if it's off-grid).
+def:pub TimeField(label: str, value: str, onValue: Callable[[str], None]) -> JsxElement {
+    options: list[str] = [];
+    for h in range(24) {
+        for m in [0, 15, 30, 45] {
+            options.append(("0" if h < 10 else "") + str(h) + ":" + ("0" if m < 10 else "") + str(m));
+        }
+    }
+    if value and value not in options {
+        options = sorted(options + [value]);
+    }
+    def handle(e: ChangeEvent) { onValue(e.target.value); }
+    return <label className="field">
+        <span>{label}</span>
+        <div>
+            <Icon name="clock" />
+            <select value={value} onChange={handle}>
+                {for opt in options {
+                    <option key={opt} value={opt}>{_time_label(opt)}</option>
+                }}
+            </select>
+            <Icon name="chevron" />
         </div>
     </label>;
 }
