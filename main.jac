@@ -12,7 +12,7 @@ import from services.along {
     create_journey, get_my_trip, get_my_trips, run_matching, get_match_results, get_match_details,
     explain_match, get_match_graph, create_anonymous_connection, send_message,
     approve_identity_reveal, get_conversation, get_my_conversations, close_match,
-    complete_match, rate_match, get_impact_metrics, get_maps_config, get_trip_route,
+    complete_match, rate_match, get_traveler_profile, get_impact_metrics, get_maps_config, get_trip_route,
 }
 
 cl {
@@ -25,6 +25,7 @@ cl {
     import from .components.along.MatchDetail { MatchDetailRoute }
     import from .components.along.ChatView { ChatRoute }
     import from .components.along.RatingView { RatingView }
+    import from .components.along.TravelerProfile { TravelerProfileRoute }
     import from .components.along.ProfilePage { ProfilePage }
     import from .components.along.Redirects { LegacyCreateTrip, LegacyMatching }
     import from .components.MobilityGraph { MobilityGraph }
@@ -50,6 +51,7 @@ cl {
                     <Route path="/chat" element={<ChatRoute />} />
                     <Route path="/chat/:matchId" element={<ChatRoute />} />
                     <Route path="/rate/:matchId" element={<RatingView />} />
+                    <Route path="/people/:matchId" element={<TravelerProfileRoute />} />
                     <Route path="/profile" element={<ProfilePage />} />
                     <Route path="/create-trip" element={<LegacyCreateTrip />} />
                     <Route path="/matching" element={<LegacyMatching />} />

@@ -1130,7 +1130,7 @@ impl complete_match(match_id: str) -> bool {
     return True;
 }
 
-impl rate_match(match_id: str, stars: int, comment: str) -> bool {
+impl rate_match(match_id: str, stars: int, comment: str, tags: list[str] = []) -> bool {
     m = _find_match(match_id);
     if m is None or stars < 1 or stars > 5 {
         return False;
@@ -1142,9 +1142,11 @@ impl rate_match(match_id: str, stars: int, comment: str) -> bool {
         return False;
     }
     other_handle = mt.driver_handle if role == "RIDER" else mt.rider_handle;
+    clean_tags = [t for t in tags if t in REVIEW_TAGS][:6];
     rating = Rating(
         ratee_key=_ratee_key(_other_root(mt), other_handle), stars=stars,
-        comment=comment.strip()[:1000], created_at=_now()
+        comment=comment.strip()[:1000], created_at=_now(), tags=clean_tags,
+        rated_on=datetime.datetime.now().strftime("%b %Y"), mode=mt.mode
     );
     root.shared ++> rating;
     grant(rating, level=ReadPerm);
@@ -1154,4 +1156,137 @@ impl rate_match(match_id: str, stars: int, comment: str) -> bool {
         mt.driver_rated = True;
     }
     return True;
+}
+
+# ---------------------------------------------------------------------------
+# Traveler profiles + reviews
+# ---------------------------------------------------------------------------
+
+glob REVIEW_TAGS: list[str] = [
+    "On time", "Friendly", "Safe driving", "Clean car", "Great communication",
+    "Flexible", "Respectful", "Easy pickup"
+];
+
+# Demo travelers' seeded reputation comes with a few sample reviews to show.
+glob DEMO_REVIEWS: dict[str, list[dict]] = {
+    "MapleDriver": [
+        {"stars": 5, "comment": "Always right on time at the Grand Blanc lot.", "tags": ["On time", "Easy pickup"], "rated_on": "Aug 2026", "mode": "ride"},
+        {"stars": 5, "comment": "Calm, careful driver — my favorite commute.", "tags": ["Safe driving", "Friendly"], "rated_on": "Jul 2026", "mode": "ride"},
+        {"stars": 4, "comment": "", "tags": ["Clean car"], "rated_on": "Jul 2026", "mode": "ride"},
+    ],
+    "NorthStar22": [
+        {"stars": 5, "comment": "Quiet ride, exactly what I wanted before work.", "tags": ["Respectful", "On time"], "rated_on": "Aug 2026", "mode": "ride"},
+        {"stars": 4, "comment": "Great driver, a few minutes late once.", "tags": ["Safe driving"], "rated_on": "Jun 2026", "mode": "ride"},
+    ],
+    "GardenRider": [
+        {"stars": 5, "comment": "Ready at the pickup spot every morning.", "tags": ["On time", "Great communication"], "rated_on": "Aug 2026", "mode": "ride"},
+    ],
+    "CampusBound": [
+        {"stars": 5, "comment": "", "tags": ["Friendly", "Respectful"], "rated_on": "Aug 2026", "mode": "ride"},
+    ],
+    "LakeLooper": [{"stars": 4, "comment": "Nice company on the drive.", "tags": ["Friendly"], "rated_on": "Jul 2026", "mode": "ride"}],
+    "YpsiCommuter": [{"stars": 5, "comment": "Super easy to coordinate with.", "tags": ["Great communication"], "rated_on": "Aug 2026", "mode": "ride"}],
+    "MovingNorth": [{"stars": 5, "comment": "Helped load the truck, split was fair.", "tags": ["Flexible", "Friendly"], "rated_on": "Aug 2026", "mode": "rental"}],
+    "WeekendWay": [
+        {"stars": 5, "comment": "Returned the SUV spotless and on time.", "tags": ["On time", "Respectful"], "rated_on": "Aug 2026", "mode": "rental"},
+        {"stars": 5, "comment": "", "tags": ["Great communication"], "rated_on": "Jun 2026", "mode": "rental"},
+    ],
+    "WindowSeat": [
+        {"stars": 5, "comment": "Found each other at baggage claim in minutes.", "tags": ["Easy pickup", "Great communication"], "rated_on": "Aug 2026", "mode": "cab"},
+        {"stars": 5, "comment": "", "tags": ["Friendly"], "rated_on": "Jul 2026", "mode": "cab"},
+    ],
+    "CityLight": [{"stars": 4, "comment": "Good cab share, small wait at the curb.", "tags": ["Flexible"], "rated_on": "Jul 2026", "mode": "cab"}],
+};
+
+def _tag_count(pair: list) -> int {
+    return pair[1] as int;
+}
+
+def _mode_label(mode: str, role: str) -> str {
+    if mode == "rental" {
+        return "Rent together";
+    }
+    if mode == "cab" {
+        return "Share a cab";
+    }
+    return "Offers rides" if role == "DRIVER" else "Needs rides";
+}
+
+impl get_traveler_profile(match_id: str) -> TravelerProfileView | None {
+    m = _find_match(match_id);
+    if m is None {
+        return None;
+    }
+    mt = m as Match;
+    role = _my_role(mt);
+    other_root = _other_root(mt);
+    handle = mt.driver_handle if role == "RIDER" else mt.rider_handle;
+    other_trip_id = mt.driver_trip_id if role == "RIDER" else mt.rider_trip_id;
+    loaded = _load_trip(other_trip_id);
+    is_demo = other_root == "demo";
+    key = _ratee_key(other_root, handle);
+
+    # Reviews: real anonymous ratings, plus seeded samples for demo travelers.
+    reviews: list[ReviewView] = [];
+    total = 0.0;
+    count = 0;
+    for r in [root.shared-->][?:Rating] {
+        if r.ratee_key == key {
+            reviews.append(ReviewView(stars=r.stars, comment=r.comment, tags=r.tags, rated_on=r.rated_on, mode=r.mode));
+            total += r.stars;
+            count += 1;
+        }
+    }
+    if is_demo and loaded is not None {
+        t = loaded as Trip;
+        for d in DEMO_REVIEWS.get(t.owner_handle, []) {
+            reviews.append(ReviewView(
+                stars=d["stars"] as int, comment=d["comment"] as str, tags=d["tags"] as list[str],
+                rated_on=d["rated_on"] as str, mode=d["mode"] as str
+            ));
+        }
+        total += t.demo_rating * t.demo_reviews;
+        count += t.demo_reviews;
+    }
+    tag_counts: dict[str, int] = {};
+    for rv in reviews {
+        for tg in rv.tags {
+            tag_counts[tg] = tag_counts.get(tg, 0) + 1;
+        }
+    }
+    top: list[str] = [p[0] as str for p in sorted([[k, v] for (k, v) in tag_counts.items()], key=_tag_count, reverse=True)][:4];
+
+    # Their public journeys (trips are visible to every logged-in user anyway).
+    theirs = [t for t in _public_trips() if t.owner_root == other_root and t.active and (not is_demo or t.owner_handle == handle)];
+    kinds = sorted(list(set([_mode_label(t.mode, t.role) for t in theirs])));
+
+    convo = _find_conversation(mt);
+    revealed = convo is not None and (convo as Conversation).identity_revealed;
+    view = TravelerProfileView(
+        match_id=jid(mt), handle=handle, revealed=revealed,
+        rating=float(f"{(total / count) if count else 0.0:.1f}"), review_count=count,
+        is_new=count == 0, top_tags=top, reviews=reviews[::-1][:12] if not is_demo else reviews[:12],
+        journeys_posted=len(theirs), journey_types=kinds, is_demo=is_demo,
+        can_review=mt.status == "completed",
+        already_reviewed=mt.rider_rated if role == "RIDER" else mt.driver_rated
+    );
+    if revealed {
+        c = convo as Conversation;
+        name_verified = _other_identity(mt, c);
+        view.display_name = name_verified[0] as str;
+        view.verified = name_verified[1] as bool;
+        if not is_demo {
+            other_profile_id = c.driver_profile_id if role == "RIDER" else c.rider_profile_id;
+            try {
+                prof = jobj(other_profile_id);
+                if isinstance(prof, User) {
+                    view.home_region = (prof as User).home_region;
+                    view.member_since = (prof as User).member_since;
+                }
+            } except Exception {
+                print("[profile] other traveler's profile not shared yet");
+            }
+        }
+    }
+    return view;
 }

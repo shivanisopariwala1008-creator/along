@@ -486,3 +486,64 @@ button.avatar { cursor: pointer; }
 }
 .map-canvas.map-pending { background: linear-gradient(110deg, #e9eee7 30%, #f1f4ef 50%, #e9eee7 70%); background-size: 200% 100%; animation: map-shimmer 1.2s linear infinite; }
 @keyframes map-shimmer { to { background-position: -200% 0; } }
+
+/* ---------------------------------------------------------------------------
+   Traveler profiles + reviews
+   --------------------------------------------------------------------------- */
+.traveler-page > .back-link { margin-bottom: 18px; }
+.traveler-hero { display: flex; gap: 18px; align-items: flex-start; padding-bottom: 22px; border-bottom: 1px solid var(--al-line); }
+.traveler-hero h1 { font-size: 28px; margin: 6px 0 4px; }
+.handle-note { color: var(--al-muted); font-size: 11px; margin: 0 0 8px; }
+.traveler-badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
+.badge-new { display: inline-flex; align-items: center; gap: 6px; background: var(--al-blue-soft); color: #315a80; border-radius: 20px; padding: 6px 11px; font-size: 11px; font-weight: 700; }
+.badge-rating { display: inline-flex; align-items: center; gap: 6px; background: var(--al-amber-soft); color: #7a4a14; border-radius: 20px; padding: 6px 11px; font-size: 12px; }
+.badge-rating small { color: #9a6a34; }
+.traveler-where { display: flex; align-items: center; gap: 6px; color: var(--al-muted); font-size: 11px; margin: 10px 0 0; }
+.traveler-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 20px 0; }
+.traveler-stats > div { border: 1px solid var(--al-line); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.traveler-stats strong { font: 700 16px "Manrope"; overflow: hidden; text-overflow: ellipsis; }
+.traveler-stats > div:last-child strong { font-size: 11px; line-height: 1.4; white-space: normal; }
+.traveler-stats small { color: var(--al-muted); font-size: 10px; }
+.traveler-section { margin-top: 22px; }
+.traveler-section h3 { font-size: 15px; margin-bottom: 12px; }
+.compliment-chips span { display: inline-flex; align-items: center; gap: 5px; background: var(--al-green-soft); color: var(--al-green-dark); font-weight: 700; }
+.new-traveler-note { display: flex; gap: 12px; padding: 16px; border-radius: 12px; background: var(--al-blue-soft); color: #315a80; }
+.new-traveler-note strong { font-size: 13px; }
+.new-traveler-note p { font-size: 11px; line-height: 1.55; margin: 4px 0 0; }
+.review-list { display: flex; flex-direction: column; gap: 10px; }
+.review-item { border: 1px solid var(--al-line); border-radius: 12px; padding: 14px; }
+.review-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.review-top small { color: var(--al-muted); font-size: 10px; }
+.review-item p { font-size: 12px; line-height: 1.55; margin: 9px 0 0; }
+.review-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.review-tags span { background: var(--al-surface-soft); border-radius: 20px; padding: 4px 9px; font-size: 10px; color: var(--al-ink); }
+.review-more { color: var(--al-muted); font-size: 10px; text-align: center; margin: 6px 0 0; }
+.stars { display: inline-flex; gap: 1px; }
+.star-slot { color: #d6dbd7; display: inline-grid; }
+.star-slot.on { color: var(--al-amber); }
+.star-slot.on svg { fill: currentColor; }
+.star-slot.half { color: var(--al-amber); opacity: .55; }
+.star-slot.half svg { fill: currentColor; }
+.traveler-actions .btn { margin-top: 10px; }
+.traveler-actions > p { margin-bottom: 8px; }
+.review-cta { border-color: var(--al-amber); color: #7a4a14; }
+.reviewed-note { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--al-green); font-size: 11px; font-weight: 700; margin: 14px 0; }
+.traveler-actions .safe-note { margin-top: 16px; }
+
+/* review form: compliment tags */
+.tag-picker { text-align: left; margin-top: 20px; }
+.tag-picker > span { display: block; font-weight: 700; font-size: 12px; margin-bottom: 8px; }
+.tag-picker em { font-style: normal; font-weight: 400; color: var(--al-muted); }
+.tag-picker > div { display: flex; flex-wrap: wrap; gap: 7px; }
+.tag-chip { border: 1px solid var(--al-line); background: white; border-radius: 20px; padding: 7px 12px; font-size: 11px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; color: var(--al-ink); }
+.tag-chip:hover { border-color: var(--al-green); }
+.tag-chip.on { background: var(--al-green-soft); border-color: var(--al-green); color: var(--al-green-dark); font-weight: 700; }
+
+/* result card: handle opens the profile */
+.name-link { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.name-link:hover { color: var(--al-green); text-decoration: underline; text-underline-offset: 3px; }
+
+@media (max-width: 700px) {
+  .traveler-hero { flex-direction: column; }
+  .traveler-stats { grid-template-columns: 1fr 1fr; }
+}

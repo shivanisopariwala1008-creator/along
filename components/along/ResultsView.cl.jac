@@ -95,6 +95,7 @@ def:pub ResultsView() -> JsxElement {
 
     def open_details(match_id: str) { nav("/matches/" + match_id); }
     def open_chat(match_id: str) { nav("/chat/" + match_id); }
+    def open_profile(match_id: str) { nav("/people/" + match_id); }
     def pick(i: int) { selected = i; }
     def set_filter(score: int) {
         min_score = score;
@@ -182,7 +183,7 @@ def:pub ResultsView() -> JsxElement {
                                     key={c.id} card={c} selected={sel == i}
                                     delay={(min(i, 6) * REVEAL_STEP_MS) / 1000.0 if phase == "revealing" else 0.0}
                                     onSelect={lambda { pick(i); }}
-                                    onDetails={open_details} onMessage={open_chat}
+                                    onDetails={open_details} onMessage={open_chat} onProfile={open_profile}
                                 />
                             }}
                         </div>
@@ -246,7 +247,8 @@ def _sorted(cards: list[MatchCardView], sort_by: str) -> list[MatchCardView] {
 
 def:pub ResultCard(
     card: MatchCardView, selected: bool, onSelect: Callable[[], None],
-    onDetails: Callable[[str], None], onMessage: Callable[[str], None], delay: float = 0.0
+    onDetails: Callable[[str], None], onMessage: Callable[[str], None], delay: float = 0.0,
+    onProfile: Callable[[str], None] | None = None
 ) -> JsxElement {
     other = card.other_trip;
     mine = card.my_trip;
@@ -260,6 +262,12 @@ def:pub ResultCard(
         e.stopPropagation();
         onMessage(card.id);
     }
+    def profile(e: MouseEvent) {
+        e.stopPropagation();
+        if onProfile {
+            onProfile(card.id);
+        }
+    }
 
     return <article
         className={"result-card" + (" selected" if selected else "") + (" card-enter" if delay > 0 else "")}
@@ -268,7 +276,7 @@ def:pub ResultCard(
         <div className="result-top">
             <span className="avatar">{initials(card.other_handle)}</span>
             <div>
-                <h3>{card.other_handle}</h3>
+                <h3><button className="name-link" onClick={profile} title="View profile">{card.other_handle}</button></h3>
                 <span className={"rating" if has_rating(other) else "new-user"}>
                     {has_rating(other) and <Icon name="star" size={14} />}
                     {rating_text(other)}

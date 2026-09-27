@@ -146,7 +146,10 @@ node Message {
 # Anonymous feedback. Stores who was rated (a root id, or "demo:<handle>"),
 # never who rated — only the aggregate is ever read back.
 node Rating {
-    has ratee_key: str = "", stars: int = 0, comment: str = "", created_at: str = "";
+    has ratee_key: str = "", stars: int = 0, comment: str = "", created_at: str = "",
+        tags: list[str] = [],        # quick compliments, e.g. "On time", "Friendly"
+        rated_on: str = "",          # "Sep 2026" — month only, to keep reviews anonymous
+        mode: str = "";              # journey type the review is about
 }
 
 node ImpactRecord {
@@ -252,6 +255,22 @@ obj ConversationSummaryView {
         match_status: str = "", mode: str = "ride";
 }
 
+# One anonymous review as shown on a profile — never who wrote it.
+obj ReviewView {
+    has stars: int = 0, comment: str = "", tags: list[str] = [], rated_on: str = "", mode: str = "";
+}
+
+# Another traveler's public profile, seen through a match you share with them.
+# Name, area and verification appear only after a mutual identity reveal.
+obj TravelerProfileView {
+    has match_id: str = "", handle: str = "", revealed: bool = False,
+        display_name: str = "", home_region: str = "", verified: bool = False,
+        member_since: str = "", rating: float = 0.0, review_count: int = 0,
+        is_new: bool = True, top_tags: list[str] = [], reviews: list[ReviewView] = [],
+        journeys_posted: int = 0, journey_types: list[str] = [], is_demo: bool = False,
+        can_review: bool = False, already_reviewed: bool = False;
+}
+
 obj ProfileView {
     has display_name: str = "", home_region: str = "", rider_handle: str = "",
         driver_handle: str = "", verified: bool = False,
@@ -329,7 +348,9 @@ def close_match(match_id: str) -> bool;
 
 def complete_match(match_id: str) -> bool;
 
-def rate_match(match_id: str, stars: int, comment: str) -> bool;
+def rate_match(match_id: str, stars: int, comment: str, tags: list[str] = []) -> bool;
+
+def get_traveler_profile(match_id: str) -> TravelerProfileView | None;
 
 def update_profile_details(display_name: str, home_region: str, phone: str) -> ProfileView;
 

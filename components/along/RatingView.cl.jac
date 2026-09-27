@@ -7,7 +7,12 @@ import from .AppHeader { AppHeader }
 import from ...lib.along { initials, fmt_date }
 sv import from ...services.along { get_match_details, get_conversation, rate_match, MatchDetailView, ConversationView }
 
-glob STAR_LABELS: list[str] = ["Tap a star to rate", "Not great", "Could be better", "Good", "Great", "Excellent"];
+glob STAR_LABELS: list[str] = ["Tap a star to rate", "Not great", "Could be better", "Good", "Great", "Excellent"],
+     # Must match REVIEW_TAGS on the server (unknown tags are dropped there).
+     REVIEW_TAGS: list[str] = [
+         "On time", "Friendly", "Safe driving", "Clean car", "Great communication",
+         "Flexible", "Respectful", "Easy pickup"
+     ];
 
 def:pub RatingView() -> JsxElement {
     params = useParams();
@@ -17,6 +22,7 @@ def:pub RatingView() -> JsxElement {
         convo: ConversationView | None = None,
         stars: int = 0,
         comment: str = "",
+        tags: list[str] = [],
         loading: bool = True,
         submitting: bool = False,
         error: str = "";
@@ -38,13 +44,17 @@ def:pub RatingView() -> JsxElement {
         }
         submitting = True;
         error = "";
-        ok = await rate_match(match_id, stars, comment);
+        ok = await rate_match(match_id, stars, comment, tags);
         submitting = False;
         if ok {
-            nav("/profile");
+            nav("/people/" + match_id);
         } else {
             error = "This journey was already rated.";
         }
+    }
+
+    def toggle_tag(t: str) {
+        tags = [x for x in tags if x != t] if t in tags else tags + [t];
     }
 
     card = detail.card if detail is not None else None;
@@ -91,9 +101,23 @@ def:pub RatingView() -> JsxElement {
                             }}
                         </div>
                         <small key="label" className="rating-label">{STAR_LABELS[stars]}</small>
+                        <div key="tags" className="tag-picker">
+                            <span>What went well? <em>Optional</em></span>
+                            <div>
+                                {for t in REVIEW_TAGS {
+                                    <button
+                                        key={t} type="button" aria-pressed={t in tags}
+                                        className={"tag-chip" + (" on" if t in tags else "")}
+                                        onClick={lambda (e: MouseEvent) { toggle_tag(t); }}
+                                    >
+                                        {t in tags and <Icon name="check" size={13} />} {t}
+                                    </button>
+                                }}
+                            </div>
+                        </div>
                         <label key="comment" className="comment-field">
                             <span>Anything else? <em>Optional</em></span>
-                            <textarea value={comment} onChange={lambda (e: ChangeEvent) { comment = e.target.value; }} placeholder="Share helpful, respectful feedback…" />
+                            <textarea value={comment} maxLength={500} onChange={lambda (e: ChangeEvent) { comment = e.target.value; }} placeholder="Share helpful, respectful feedback…" />
                         </label>
                         <div key="anon" className="anonymous-note">
                             <Icon name="lock" />

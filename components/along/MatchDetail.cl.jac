@@ -172,6 +172,12 @@ def:pub MatchDetail(match_id: str) -> JsxElement {
                         {"Continue conversation" if card.has_conversation else "Start anonymous conversation"}
                         <Icon name="chat" />
                     </button>
+                    <button className="btn btn-secondary full-button graph-link" onClick={lambda (e: MouseEvent) { nav("/people/" + match_id); }}>
+                        <Icon name="user" /> View full profile
+                    </button>
+                    {card.status == "completed" and <button className="btn btn-secondary full-button graph-link" onClick={lambda (e: MouseEvent) { nav("/rate/" + match_id); }}>
+                        <Icon name="star" /> Leave a review
+                    </button>}
                     <button className="btn btn-secondary full-button graph-link" onClick={lambda (e: MouseEvent) { nav("/graph/" + match_id); }}>
                         <Icon name="graph" /> How Along found this
                     </button>

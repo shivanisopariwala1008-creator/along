@@ -97,22 +97,22 @@ glob CONVERSATIONS: list[dict] = [
         "Holly is a quick hop off US-23 for me. Evenings I leave around 5:30, does that work?",
         "That's perfect for the return trip too. Thank you!",
         "See you Monday at the Holly Park & Ride."
-    ], "comments": ["Right on time both ways, super friendly.", "Easy pickup and great company."]},
+    ], "comments": ["Right on time both ways, super friendly.", "Easy pickup and great company."], "tags": [["On time", "Friendly"], ["Easy pickup", "Respectful"]]},
     {"from": "aisha", "to": "dana", "end": "completed", "stars": [5, 4], "messages": [
         "Hi Dana! Priya's car is full on Thursday — could I ride with you that day?",
         "Sure, I pass Holly around 7:55. I'll message when I'm close."
-    ], "comments": ["Saved my Thursday, thanks!", "Nice ride, a couple minutes late to the pickup."]},
+    ], "comments": ["Saved my Thursday, thanks!", "Nice ride, a couple minutes late to the pickup."], "tags": [["Flexible", "Friendly"], ["Great communication"]]},
     {"from": "ben", "to": "omar", "end": "completed", "stars": [5, 4], "messages": [
         "Hi! I'm in East Lansing heading to Detroit for work. Could you pick up near MSU?",
         "Yes — I take I-96 anyway. Grand River & Harrison at 7:25?",
         "Works great. I'll chip in for gas.",
         "Appreciated. See you then."
-    ], "comments": ["Smooth drive, left exactly on time.", "Great passenger, very punctual."]},
+    ], "comments": ["Smooth drive, left exactly on time.", "Great passenger, very punctual."], "tags": [["On time", "Safe driving"], ["On time", "Respectful"]]},
     {"from": "riley", "to": "kevin", "end": "completed", "stars": [4, 5], "messages": [
         "Hey! I'm renting a truck Novi -> Detroit Saturday to move a few boxes. Want to split it?",
         "I was about to rent an SUV for the same run — a truck works better. Half each?",
         "Half each. I'll book it for 9."
-    ], "comments": ["Helpful with loading, thanks!", "Riley organized everything, easy split."]},
+    ], "comments": ["Helpful with loading, thanks!", "Riley organized everything, easy split."], "tags": [["Flexible"], ["Great communication", "Friendly"]]},
     {"from": "sofia", "to": "riley", "end": "anonymous", "messages": [
         "Hi! I'm also moving to Detroit next week and need a minivan. Could we coordinate a rental?",
         "Possibly! How much stuff do you have? I've got about 10 boxes and a desk."
@@ -124,11 +124,11 @@ glob CONVERSATIONS: list[dict] = [
     {"from": "mia", "to": "jordan", "end": "completed", "stars": [5, 5], "messages": [
         "Hi Jordan! Also at DTW around 6:30, heading downtown. Split an Uber?",
         "Absolutely — meet at the rideshare pickup, level 4?"
-    ], "comments": ["Made the airport ride so much cheaper!", "Friendly and easy to find."]},
+    ], "comments": ["Made the airport ride so much cheaper!", "Friendly and easy to find."], "tags": [["Easy pickup", "Friendly"], ["Easy pickup"]]},
     {"from": "sam", "to": "mia", "end": "completed", "stars": [4, 5], "messages": [
         "Hey Mia, I'm going to Midtown at about 6:15 — sharing a cab works if you don't mind a short stop.",
         "No problem, Midtown is on the way for me."
-    ], "comments": ["Good company, a bit of a wait at pickup.", "Sam was great, would share again."]},
+    ], "comments": ["Good company, a bit of a wait at pickup.", "Sam was great, would share again."], "tags": [["Friendly"], ["Respectful", "Great communication"]]},
     {"from": "lena", "to": "grace", "end": "pending", "messages": [
         "Hi Grace! I'm in Brighton heading to Ann Arbor on Saturday morning — any room?",
         "Hi Lena! I leave Howell at 7:50 and could pick you up in Brighton around 8:05."
@@ -254,8 +254,9 @@ def seed_conversations(people: dict) -> None {
             stars = c["stars"];
             comments = c.get("comments", ["", ""]);
             # rate_match refuses a second rating, so re-runs don't stack reviews.
-            fn("rate_match", a["token"], {"match_id": match_id, "stars": stars[0], "comment": comments[0]});
-            fn("rate_match", b["token"], {"match_id": match_id, "stars": stars[1], "comment": comments[1]});
+            tags = c.get("tags", [[], []]);
+            fn("rate_match", a["token"], {"match_id": match_id, "stars": stars[0], "comment": comments[0], "tags": tags[0]});
+            fn("rate_match", b["token"], {"match_id": match_id, "stars": stars[1], "comment": comments[1], "tags": tags[1]});
         }
         state = fn("get_conversation", a["token"], {"match_id": match_id});
         print(f"  {a['name']:<14} <-> {b['name']:<14} {c['end']:<10} {len(state['messages'] as list)} messages");
