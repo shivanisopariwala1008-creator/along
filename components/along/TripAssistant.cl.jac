@@ -58,7 +58,7 @@ def:pub TripAssistant() -> JsxElement {
     }
 
     return <form className="trip-assistant" onSubmit={handle_submit}>
-        <label htmlFor="assistant-input"><Icon name="spark" size={16} /> Tell Along where you’re going</label>
+        <label htmlFor="assistant-input" className="visually-hidden">Describe your trip</label>
         <div className="assistant-box">
             <input
                 id="assistant-input" value={text} placeholder="e.g. Flint to Ann Arbor by 9 every weekday, back at 5"

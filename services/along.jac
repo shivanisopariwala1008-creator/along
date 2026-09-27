@@ -428,6 +428,7 @@ obj TripDraftView {
         time: str = "", time_preference: str = "arrive_by",
         recurring: bool = False, travel_date: str = "", round_trip: bool = False,
         seats: int = 0, people: int = 1, vehicle: str = "", moving_help: bool = False,
+        needs_driver: bool = False, gender_prefs: list[str] = [], age_min: int = 1, age_max: int = 100,
         summary: str = "", missing: list[str] = [];
 }
 
@@ -593,6 +594,10 @@ def get_my_trips() -> list[TripView];
 # anyone who posts a fitting journey later notifies me. Returns how many
 # people were told.
 def post_journey(trip_id: str) -> int;
+
+# Same journey, other way to go: "ride" (with a driver) <-> "cab" (split a
+# cab). Makes a private copy in the other mode and returns its id.
+def switch_journey(trip_id: str, mode: str) -> str;
 
 # Take one of my journeys down: it stops matching and its open suggestions close.
 def remove_journey(trip_id: str) -> bool;

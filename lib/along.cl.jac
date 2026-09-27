@@ -10,7 +10,9 @@ A journey "kind" is one of the four Figma entry points:
 
 sv import from ..services.along { TripView, MatchCardView }
 
-glob FLOW_KEYS: list[str] = ["ride", "buddy", "rental", "cab"];
+# "Split a cab" lives inside "Find a ride" (a choice on that page), so the
+# nav and home show three entry points while cab journeys keep their own kind.
+glob FLOW_KEYS: list[str] = ["ride", "buddy", "rental"];
 
 def:pub flow_keys() -> list[str] {
     return FLOW_KEYS;
@@ -39,19 +41,19 @@ def:pub flow_info(kind: str) -> dict[str, str] {
     }
     if kind == "cab" {
         return {
-            "title": "Share a cab", "eyebrow": "Split a similar journey", "icon": "cab",
-            "description": "Find people traveling from a similar point A to point B.",
+            "title": "Split a cab", "eyebrow": "I need a ride · split a cab", "icon": "cab",
+            "description": "Share a taxi or Uber fare with people going the same way.",
             "detail": "Split a cab with people going the same way.",
-            "heading": "Where are you headed?", "origin": "Detroit Metro Airport",
+            "heading": "Where do you need to go?", "origin": "Detroit Metro Airport",
             "destination": "Downtown Detroit", "result_title": "People with similar journeys",
             "marker": "C", "marker_label": "Cab share", "accent": "amber", "submit": "Find cab partners"
         };
     }
     return {
         "title": "Find a ride", "eyebrow": "I need a ride", "icon": "car",
-        "description": "Connect with a trusted driver already heading your way.",
-        "detail": "Ride with someone already driving your way.",
-        "heading": "Tell us about your journey", "origin": "Grand Blanc, MI",
+        "description": "Ride with a trusted driver already heading your way — or split a cab.",
+        "detail": "Ride with a driver heading your way, or split a cab.",
+        "heading": "Where do you need to go?", "origin": "Grand Blanc, MI",
         "destination": "Ann Arbor, MI", "result_title": "Drivers heading your way", "marker": "D",
         "marker_label": "Ride offer", "accent": "green", "submit": "Show matching rides"
     };

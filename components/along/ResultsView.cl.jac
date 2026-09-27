@@ -14,7 +14,7 @@ import from ...lib.along {
     flow_info, flow_of_trip, short_place, initials, rating_text, has_rating,
     when_text, meta_text, trip_timing, fmt_time, match_label
 }
-sv import from ...services.along { run_agents, get_match_results, get_my_trip, book_relay, post_journey, TripView, MatchCardView, AgentRunView, AgentStepView, RelayView }
+sv import from ...services.along { run_agents, get_match_results, get_my_trip, book_relay, post_journey, switch_journey, TripView, MatchCardView, AgentRunView, AgentStepView, RelayView }
 
 # Keyed on the URL so /results?tripId=… and /matches never share stale state.
 def:pub ResultsRoute() -> JsxElement {
@@ -99,6 +99,13 @@ def:pub ResultsView() -> JsxElement {
     shown = [c for c in shown if c.overall_score >= min_score];
     sel = selected if selected < len(shown) else 0;
     focus = shown[sel] if len(shown) > 0 else None;
+    async def switch_to(mode: str) -> None {
+        new_id: str = await switch_journey(trip_id, mode);
+        if new_id {
+            window.location.assign("/results?tripId=" + new_id);  # jac:ignore[E1030]
+        }
+    }
+
     async def post_it -> None {
         posting = True;
         told: int = await post_journey(trip_id);
@@ -170,6 +177,12 @@ def:pub ResultsView() -> JsxElement {
                             <span className="step-kicker">{"Step 2 of 2" if trip_id else "All journeys"}</span>
                             <h1>{title}</h1>
                             <p>{subtitle}</p>
+                            {if trip_id and (kind == "ride" or kind == "cab") and phase != "searching" {
+                                <button key="switch" className="switch-link" onClick={lambda (e: MouseEvent) { switch_to("cab" if kind == "ride" else "ride"); }}>
+                                    <Icon name={"cab" if kind == "ride" else "car"} size={15} />
+                                    {"Or split a cab for the same trip" if kind == "ride" else "Or look for drivers heading your way"}
+                                </button>
+                            }}
                         </div>
                         <div className="list-tools">
                             <button className="sort-button" onClick={lambda (e: MouseEvent) { sort_by = "time" if sort_by == "fit" else "fit"; selected = 0; }}>

@@ -22,6 +22,11 @@ glob VEHICLES: list[list[str]] = [
 
 glob SPACE_OPTIONS: list[str] = ["A few boxes", "Boxes + small furniture", "One room", "Studio / 1-bedroom", "2+ bedrooms"];
 
+glob RIDE_TYPES: list[list[str]] = [
+    ["ride", "car", "With a driver", "Someone already driving your way"],
+    ["cab", "cab", "Split a cab", "Share a taxi or Uber fare"]
+];
+
 glob DISTANCES: list[str] = ["Up to 2 miles", "Up to 5 miles", "Up to 10 miles"],
      GENDERS: list[list[str]] = [["woman", "Women"], ["man", "Men"], ["non-binary", "Non-binary"]];
 
@@ -32,13 +37,12 @@ def:pub JourneyRoute() -> JsxElement {
     if kind not in ["ride", "buddy", "rental", "cab"] {
         return <Navigate to="/journey/ride" replace={True} />;
     }
-    return <JourneyForm key={kind} kind={kind} />;
+    return <JourneyForm key={"ride" if kind == "cab" else kind} route_kind={kind} />;
 }
 
-def:pub JourneyForm(kind: str) -> JsxElement {
-    info = flow_info(kind);
-
-    has origin_name: str = "",
+def:pub JourneyForm(route_kind: str) -> JsxElement {
+    has ride_type: str = route_kind,            # "ride" (with a driver) or "cab" (split a cab)
+        origin_name: str = "",
         destination_name: str = "",
         origin_lat: float = 0.0,
         origin_lng: float = 0.0,
@@ -57,14 +61,14 @@ def:pub JourneyForm(kind: str) -> JsxElement {
         draft_note: str = "",
         draft_sentence: str = "",
         maps_key: str = "",
-        recurring: bool = kind == "ride" or kind == "buddy",
+        recurring: bool = route_kind == "ride" or route_kind == "buddy",
         travel_date: str = today_iso(),
-        time_preference: str = "depart_at" if kind == "buddy" or kind == "cab" else "arrive_by",
-        time: str = "18:30" if kind == "cab" else ("07:40" if kind == "buddy" else "09:00"),
+        time_preference: str = "depart_at" if route_kind == "buddy" or route_kind == "cab" else "arrive_by",
+        time: str = "18:30" if route_kind == "cab" else ("07:40" if route_kind == "buddy" else "09:00"),
         distance: str = "Up to 5 miles",
-        count: int = 3 if kind == "buddy" else 1,
+        count: int = 3 if route_kind == "buddy" else 1,
         vehicle: str = "SUV",
-        moving_help: bool = kind == "rental",
+        moving_help: bool = False,
         age_pref: str = "No preference",
         gender_pref: str = "No preference",
         age_min: int = 1,
@@ -74,6 +78,15 @@ def:pub JourneyForm(kind: str) -> JsxElement {
         error: str = "";
 
     nav = useNavigate();
+    # "Find a ride" covers both: riding with a driver and splitting a cab.
+    kind: str = ride_type if route_kind == "ride" or route_kind == "cab" else route_kind;
+    info = flow_info(kind);
+
+    def choose_type(t: str) {
+        ride_type = t;
+        time_preference = "depart_at" if t == "cab" else time_preference;
+        window.history.replaceState(None, "", "/journey/" + t);  # jac:ignore[E1030]
+    }
 
     # Pre-fill from the trip assistant's draft, if it just sent us here.
     can with entry {
@@ -105,6 +118,16 @@ def:pub JourneyForm(kind: str) -> JsxElement {
             vehicle = d["vehicle"] as str;
         }
         moving_help = bool(d["moving_help"]) or moving_help;
+        needs_driver = bool(d["needs_driver"]) or needs_driver;
+        if d["gender_prefs"] {
+            gender_prefs = d["gender_prefs"] as list[str];
+        }
+        if d["age_min"] {
+            age_min = d["age_min"] as int;
+        }
+        if d["age_max"] {
+            age_max = d["age_max"] as int;
+        }
         show_more = True;   # let them see the timing the assistant picked
         draft_note = (d["summary"] or "") as str;
         draft_sentence = (d["sentence"] or "") as str;
@@ -269,6 +292,20 @@ def:pub JourneyForm(kind: str) -> JsxElement {
                 <span className="step-kicker">{"Step 1 of 2 · " + info["eyebrow"]}</span>
                 <h1>{info["heading"]}</h1>
                 <p>{info["description"]}</p>
+                {if kind == "ride" or kind == "cab" {
+                    <div key="how" className="ride-type" role="radiogroup" aria-label="How do you want to go?">
+                        {for opt in RIDE_TYPES {
+                            <button
+                                key={opt[0]} type="button" role="radio" aria-checked={kind == opt[0]}
+                                className={"ride-type-option" + (" on" if kind == opt[0] else "")}
+                                onClick={lambda (e: MouseEvent) { choose_type(opt[0]); }}
+                            >
+                                <Icon name={opt[1]} />
+                                <span><strong>{opt[2]}</strong><small>{opt[3]}</small></span>
+                            </button>
+                        }}
+                    </div>
+                }}
             </div>
             {if draft_note or draft_sentence {
                 <div key="draft" className="assistant-banner" role="status">
