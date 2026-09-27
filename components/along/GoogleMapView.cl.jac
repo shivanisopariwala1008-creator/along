@@ -36,7 +36,7 @@ def:pub GoogleMapView(
             {"points": relay.leg2_points, "color": "#386fa4", "dashed": False},
         ];
     } elif other_route is not None and len(other_route.points) > 1 {
-        lines = lines + [{"points": other_route.points, "color": _accent_hex(info["accent"]), "dashed": True}];
+        lines = lines + [{"points": other_route.points, "color": "#0e4d31", "dashed": True}];
     }
     # Redraw only when the routes themselves change, not on every render.
     signature = _signature(my_route) + "|" + _signature(other_route) + "|" + (relay.id if relay is not None else "");

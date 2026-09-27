@@ -66,7 +66,7 @@ def:pub AppHeader(progress: bool = False) -> JsxElement {
             {if logged_in {
                 <NotificationBell key="bell" />
                 <button key="convos" className="icon-link" onClick={lambda (e: MouseEvent) { go("/chat"); }}>
-                    <Icon name="chat" /><span className="desktop-only">Conversations</span>
+                    <Icon name="chat" /><span className="desktop-only">Messages</span>
                 </button>
                 <button key="avatar" className="avatar avatar-small" onClick={lambda (e: MouseEvent) { go("/profile"); }} aria-label="Profile">
                     {avatar or <Icon name="user" size={16} />}
@@ -85,9 +85,8 @@ def:pub AppHeader(progress: bool = False) -> JsxElement {
                     <button key={key} onClick={lambda (e: MouseEvent) { go("/journey/" + key); }}>{flow_info(key)["title"]}</button>
                 }}
                 <button onClick={lambda (e: MouseEvent) { go("/matches"); }}>My matches</button>
-                <button onClick={lambda (e: MouseEvent) { go("/chat"); }}>Conversations</button>
+                <button onClick={lambda (e: MouseEvent) { go("/chat"); }}>Messages</button>
                 <button onClick={lambda (e: MouseEvent) { go("/profile"); }}>Profile &amp; trust</button>
-                <button onClick={lambda (e: MouseEvent) { go("/impact"); }}>Local impact</button>
                 {if logged_in {
                     <button key="out" onClick={handle_logout}>Log out</button>
                 } else {

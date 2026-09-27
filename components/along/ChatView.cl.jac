@@ -190,7 +190,6 @@ def:pub ChatView(match_id: str) -> JsxElement {
                         <div>
                             <button aria-label="View match" onClick={lambda (e: MouseEvent) { nav("/matches/" + match_id); }}><Icon name="map" /></button>
                             <button aria-label="View profile" title="View profile" onClick={lambda (e: MouseEvent) { nav("/people/" + match_id); }}><Icon name="user" /></button>
-                            <button aria-label="How Along found this" onClick={lambda (e: MouseEvent) { nav("/graph/" + match_id); }}><Icon name="graph" /></button>
                         </div>
                     </header>
                     <div key="banner" className="identity-banner">
@@ -261,15 +260,15 @@ def:pub ChatView(match_id: str) -> JsxElement {
                     }
                     if completed {
                         <div key="done" className="chat-footer-actions">
-                            <span>Arrangement complete</span>
+                            <span>Trip done</span>
                             {if not c.i_rated {
                                 <button onClick={lambda (e: MouseEvent) { nav("/rate/" + match_id); }}><Icon name="star" /> Leave a review</button>
                             }}
                         </div>
                     } elif not closed {
                         <div key="actions" className="chat-footer-actions">
-                            <button onClick={handle_decline} disabled={busy}>Decline &amp; close conversation</button>
-                            <button onClick={handle_complete} disabled={busy}><Icon name="check" /> Mark arrangement complete</button>
+                            <button onClick={handle_decline} disabled={busy}>Not interested</button>
+                            <button onClick={handle_complete} disabled={busy}><Icon name="check" /> Trip done</button>
                         </div>
                     }
                 }}

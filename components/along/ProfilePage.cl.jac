@@ -163,8 +163,8 @@ def:pub ProfilePage() -> JsxElement {
                         <div>
                             <span className="setting-icon"><Icon name="star" /></span>
                             <span>
-                                <strong>Completed journeys</strong>
-                                <small>{plural(p.completed_connections if p is not None else 0, "arrangement", "arrangements") + " marked complete"}</small>
+                                <strong>Trips done</strong>
+                                <small>{plural(p.completed_connections if p is not None else 0, "trip", "trips") + " completed with Along"}</small>
                             </span>
                         </div>
                     </div>
@@ -189,7 +189,7 @@ def:pub ProfilePage() -> JsxElement {
                                 <em>{"Rated by the community" if p is not None and p.has_ratings else "New to Along"}</em>
                             </span>
                         </div>
-                        <p>{"Offering a ride, you appear as " + (p.driver_handle if p is not None else "") + ". No rating appears until feedback is received."}</p>
+                        <p>Your real name stays hidden until you both agree. No rating appears until you receive feedback.</p>
                     </div>
                 </aside>
             </div>

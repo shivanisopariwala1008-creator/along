@@ -226,7 +226,7 @@ obj MatchCardView {
         my_trip: TripView | None = None, other_trip: TripView | None = None,
         mode: str = "ride", fit_label: str = "", why: str = "",
         other_handle: str = "", has_conversation: bool = False,
-        agent_notes: list[AgentNoteView] = [];
+        agent_notes: list[AgentNoteView] = [], pickup_gap_miles: float = -1.0;
 }
 
 obj MatchDetailView {

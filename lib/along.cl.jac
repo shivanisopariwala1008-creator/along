@@ -19,9 +19,9 @@ def:pub flow_keys() -> list[str] {
 def:pub flow_info(kind: str) -> dict[str, str] {
     if kind == "buddy" {
         return {
-            "title": "Find a buddy", "eyebrow": "I’m offering a ride", "icon": "users",
+            "title": "Offer a ride", "eyebrow": "I’m driving", "icon": "users",
             "description": "Post your route and find people nearby who need a ride.",
-            "detail": "I’m offering a ride and want to find someone going my way.",
+            "detail": "I’m driving and have seats to share.",
             "heading": "Where are you driving?", "origin": "Flint, MI", "destination": "Ann Arbor, MI",
             "result_title": "Riders along your route", "marker": "R", "marker_label": "Ride request",
             "accent": "blue", "submit": "Post route & find riders"
@@ -29,9 +29,9 @@ def:pub flow_info(kind: str) -> dict[str, str] {
     }
     if kind == "rental" {
         return {
-            "title": "Rent together", "eyebrow": "Share a car rental", "icon": "key",
+            "title": "Share a rental", "eyebrow": "Share a car rental", "icon": "key",
             "description": "Choose a vehicle and connect with compatible rental partners.",
-            "detail": "I want to share a car rental with someone.",
+            "detail": "Split a rental car — or a truck for moving.",
             "heading": "Plan your shared rental", "origin": "Novi, MI", "destination": "Detroit, MI",
             "result_title": "Potential rental partners", "marker": "P", "marker_label": "Rental partner",
             "accent": "purple", "submit": "Find rental partners"
@@ -41,7 +41,7 @@ def:pub flow_info(kind: str) -> dict[str, str] {
         return {
             "title": "Share a cab", "eyebrow": "Split a similar journey", "icon": "cab",
             "description": "Find people traveling from a similar point A to point B.",
-            "detail": "I want to split a cab with people traveling a similar route.",
+            "detail": "Split a cab with people going the same way.",
             "heading": "Where are you headed?", "origin": "Detroit Metro Airport",
             "destination": "Downtown Detroit", "result_title": "People with similar journeys",
             "marker": "C", "marker_label": "Cab share", "accent": "amber", "submit": "Find cab partners"
@@ -50,11 +50,22 @@ def:pub flow_info(kind: str) -> dict[str, str] {
     return {
         "title": "Find a ride", "eyebrow": "I need a ride", "icon": "car",
         "description": "Connect with a trusted driver already heading your way.",
-        "detail": "I need a ride from someone driving.",
+        "detail": "Ride with someone already driving your way.",
         "heading": "Tell us about your journey", "origin": "Grand Blanc, MI",
         "destination": "Ann Arbor, MI", "result_title": "Drivers heading your way", "marker": "D",
         "marker_label": "Ride offer", "accent": "green", "submit": "Show matching rides"
     };
+}
+
+# One plain label per match, instead of a fit badge plus a separate percentage.
+def:pub match_label(score: int) -> str {
+    if score >= 85 {
+        return "Great match · " + str(score) + "%";
+    }
+    if score >= 70 {
+        return "Good match · " + str(score) + "%";
+    }
+    return "Possible match · " + str(score) + "%";
 }
 
 def:pub flow_of(mode: str, role: str) -> str {

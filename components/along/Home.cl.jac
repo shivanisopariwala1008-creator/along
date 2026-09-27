@@ -21,8 +21,8 @@ def:pub Home() -> JsxElement {
                 <div className="hero-copy">
                     <div className="eyebrow"><span className="live-dot" />Travel together across Michigan</div>
                     <h1>Shared journeys.<br /><em>Stronger communities.</em></h1>
-                    <p>Find people heading your way, make a trusted connection, and move through Michigan together.</p>
                     <TripAssistant />
+                    <p className="hero-sub">Find people heading your way, make a trusted connection, and move through Michigan together.</p>
                 </div>
                 <div className="mini-map-wrap" aria-hidden="true">
                     <div className="mini-map">
@@ -49,15 +49,13 @@ def:pub Home() -> JsxElement {
             <section className="choice-section">
                 <div className="section-heading">
                     <div>
-                        <span className="step-kicker">Start your journey</span>
-                        <h2>How would you like to travel?</h2>
+                        <span className="step-kicker">Or start here</span>
+                        <h2>How are you traveling?</h2>
                     </div>
-                    <p>Choose one to get started. You can adjust every detail next.</p>
                 </div>
                 <div className="action-grid">
                     {for (i, key) in enumerate(flow_keys()) {
                         <button className={"action-card action-" + key} key={key} onClick={lambda (e: MouseEvent) { start(key); }}>
-                            <span className="action-number">{"0" + str(i + 1)}</span>
                             <span className="action-icon"><Icon name={flow_info(key)["icon"]} size={25} /></span>
                             <span className="action-title">{flow_info(key)["title"]}</span>
                             <span className="action-detail">{flow_info(key)["detail"]}</span>
@@ -85,9 +83,8 @@ def:pub Home() -> JsxElement {
             <footer className="home-footer">
                 <span>Shared journeys. Stronger communities.</span>
                 <nav>
-                    <Link to="/impact">Local impact</Link>
-                    <Link to="/trust-safety">Trust &amp; safety</Link>
                     <Link to="/matches">My matches</Link>
+                    <Link to="/profile">Profile</Link>
                 </nav>
             </footer>
         </main>

@@ -2,11 +2,7 @@
 Signup is three awaited steps: create account, log in, save the display name."""
 
 import from "@jac/runtime" { Link, useNavigate, useLocation, jacLogin, jacSignup }
-import from .ui.button { Button }
-import from .ui.card { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
-import from .ui.input { Input }
-import from .ui.field { Field, FieldLabel }
-import from .BrandMark { BrandMark }
+import from .along.Icon { Icon }
 sv import from ..services.along { update_profile }
 
 def:pub AuthPage(mode: str = "login") -> JsxElement {
@@ -78,47 +74,45 @@ def:pub AuthPage(mode: str = "login") -> JsxElement {
 
     switch_link: str = ("/login" if is_signup else "/signup") + "?next=" + encodeURIComponent(next_path);  # jac:ignore[W2001]
 
-    return <div className="flex min-h-svh flex-col items-center justify-center gap-6 bg-muted/30 pt-10 pb-10 pl-4 pr-4">
-        <Link to="/"><BrandMark /></Link>
-        <form onSubmit={handle_submit} className="w-full max-w-sm">
-            <Card className="shadow-sm">
-                <CardHeader>
-                    <CardTitle>{"Create your account" if is_signup else "Welcome back"}</CardTitle>
-                    <CardDescription>
-                        {"Other members only see your anonymous handle until you both choose to connect." if is_signup else "Log in to post journeys and see your matches."}
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="flex flex-col gap-4">
-                    {is_signup and <Field>
-                        <FieldLabel htmlFor="name">Your name</FieldLabel>
-                        <Input id="name" value={display_name} onChange={handle_name} placeholder="Priya" autoComplete="name" />
-                    </Field>}
-                    <Field>
-                        <FieldLabel htmlFor="email">Email</FieldLabel>
-                        <Input id="email" type="email" value={email} onChange={handle_email} placeholder="you@example.com" autoComplete="email" />
-                    </Field>
-                    <Field>
-                        <FieldLabel htmlFor="password">Password</FieldLabel>
-                        <Input
-                            id="password" type="password" value={password} onChange={handle_password}
-                            placeholder={"At least 8 characters" if is_signup else ""}
-                            autoComplete={"new-password" if is_signup else "current-password"}
-                        />
-                    </Field>
-                    {error and <p className="text-sm text-destructive">{error}</p>}
-                </CardContent>
-                <CardFooter className="flex flex-col gap-3">
-                    <Button type="submit" disabled={busy} className="w-full">
-                        {("Creating account..." if is_signup else "Logging in...") if busy else ("Create account" if is_signup else "Log in")}
-                    </Button>
-                    <p className="text-sm text-muted-foreground">
-                        {"Already have an account? " if is_signup else "New to Along? "}
-                        <Link to={switch_link} className="font-medium text-foreground underline underline-offset-4">
-                            {"Log in" if is_signup else "Create an account"}
-                        </Link>
-                    </p>
-                </CardFooter>
-            </Card>
+    return <div className="app-shell auth-page">
+        <Link to="/" className="brand auth-brand" aria-label="Along home">
+            <span className="brand-mark"><span /></span>
+            <span>Along</span>
+        </Link>
+        <form onSubmit={handle_submit} className="auth-card">
+            <span className="step-kicker">{"Join Along" if is_signup else "Welcome back"}</span>
+            <h1>{"Create your account" if is_signup else "Log in"}</h1>
+            <p>{"Other members only see your anonymous name until you both choose to connect." if is_signup else "Pick up where you left off — your journeys and messages are waiting."}</p>
+            {if is_signup {
+                <label key="name" className="field">
+                    <span>Your name</span>
+                    <div><Icon name="user" /><input id="name" value={display_name} onChange={handle_name} placeholder="Priya" autoComplete="name" /></div>
+                </label>
+            }}
+            <label className="field">
+                <span>Email</span>
+                <div><Icon name="chat" /><input id="email" type="email" value={email} onChange={handle_email} placeholder="you@example.com" autoComplete="email" /></div>
+            </label>
+            <label className="field">
+                <span>Password</span>
+                <div>
+                    <Icon name="lock" />
+                    <input
+                        id="password" type="password" value={password} onChange={handle_password}
+                        placeholder={"At least 8 characters" if is_signup else ""}
+                        autoComplete={"new-password" if is_signup else "current-password"}
+                    />
+                </div>
+            </label>
+            {error and <p className="form-error" role="alert">{error}</p>}
+            <button type="submit" className="btn btn-primary full-button" disabled={busy}>
+                {("Creating account…" if is_signup else "Logging in…") if busy else ("Create account" if is_signup else "Log in")}
+            </button>
+            <p className="auth-switch">
+                {"Already have an account? " if is_signup else "New to Along? "}
+                <Link to={switch_link}>{"Log in" if is_signup else "Create an account"}</Link>
+            </p>
+            <div className="auth-note"><Icon name="shield" size={16} /> Your identity stays private until you both agree.</div>
         </form>
     </div>;
 }

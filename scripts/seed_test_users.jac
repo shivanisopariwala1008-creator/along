@@ -274,8 +274,9 @@ def greet(people: dict) -> None {
     sent = 0;
     for p in people.values() {
         for m in fn("run_matching", p["token"], {"trip_id": p["trip"]["id"]}) {
-            other = m["other_handle"];
-            is_real = other.startswith("Rider ") or other.startswith("Driver ");
+            other: str = m["other_handle"] as str;
+            # Real travelers have two-word anonymous names; demo travelers are one word.
+            is_real = " " in other;
             if not is_real or other in test_handles {
                 continue;
             }

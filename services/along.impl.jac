@@ -124,8 +124,27 @@ def _me() -> User {
     return user;
 }
 
+# Friendly anonymous name ("Maple Fox"), stable per user and the same whether
+# they ride or drive. Hides identity without sounding like a ticket number.
+glob HANDLE_WORDS_A: list[str] = [
+    "Maple", "Cedar", "River", "Harbor", "Lake", "Birch", "Willow", "Aspen",
+    "Pine", "Meadow", "Prairie", "Summit", "Canyon", "Coral", "Amber", "Ivory",
+    "Sage", "Juniper", "Hazel", "Clover", "Indigo", "Copper", "Silver", "Golden",
+    "Misty", "Sunny", "Breezy", "Quiet", "Swift", "Gentle", "Bright", "Lucky"
+],
+     HANDLE_WORDS_B: list[str] = [
+    "Fox", "Heron", "Otter", "Robin", "Finch", "Sparrow", "Falcon", "Owl",
+    "Deer", "Hare", "Badger", "Beaver", "Lynx", "Wren", "Swan", "Crane",
+    "Bison", "Moose", "Loon", "Trout", "Maple", "Comet", "Pebble", "Harbor",
+    "Lantern", "Compass", "Meadow", "Brook", "Aspen", "Spruce", "Cardinal", "Kestrel"
+];
+
+def _friendly_name(n: int) -> str {
+    return HANDLE_WORDS_A[n % 32] + " " + HANDLE_WORDS_B[(n // 32) % 32];
+}
+
 def _handle_for(me: User, role: str) -> str {
-    return ("Driver " if role == "DRIVER" else "Rider ") + str(me.handle_number);
+    return _friendly_name(me.handle_number);
 }
 
 def _now() -> str {
@@ -704,6 +723,7 @@ def _match_to_card(m: Match) -> MatchCardView {
         mode=m.mode, fit_label=_fit_label(m), why=_why_text(m, mine, other),
         other_handle=m.driver_handle if i_am_rider else m.rider_handle,
         has_conversation=_find_conversation(m) is not None,
+        pickup_gap_miles=m.pickup_gap_miles,
         agent_notes=[
             AgentNoteView(agent=name, note=m.agent_notes[name])
             for name in AGENT_ORDER if name in m.agent_notes
@@ -951,7 +971,9 @@ def _run_agents(trip_id: str, with_relays: bool) -> AgentRunView {
     relays: list[RelayView] = [];
     o = origin as Trip;
     if with_relays and o.mode == "ride" and o.role == "RIDER" {
-        relays = _find_relays(o, cards);
+        # Only offer two rides when they beat the best direct ride.
+        best_direct = cards[0].overall_score if len(cards) > 0 else 0;
+        relays = [r for r in _find_relays(o, cards) if best_direct < 70 or r.score > best_direct];
         steps = steps + [AgentStepView(
             agent="Relay Agent", role="Pairs two drivers with a safe handoff when no one goes the whole way",
             looked_at=len([c for c in cards if c.other_trip is not None]), kept=len(relays),
@@ -1386,7 +1408,7 @@ def _tag_count(pair: list) -> int {
 
 def _mode_label(mode: str, role: str) -> str {
     if mode == "rental" {
-        return "Rent together";
+        return "Share a rental";
     }
     if mode == "cab" {
         return "Share a cab";
