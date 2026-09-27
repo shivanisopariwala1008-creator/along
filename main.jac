@@ -12,7 +12,7 @@ import from services.along {
     create_journey, get_my_trip, get_my_trips, get_rental_spots, run_matching, run_agents, get_match_results, get_match_details,
     explain_match, get_match_graph, create_anonymous_connection, send_message,
     approve_identity_reveal, get_conversation, get_my_conversations, close_match,
-    complete_match, rate_match, get_my_ratings, get_my_rating, remove_journey, get_traveler_profile, get_my_notifications, mark_notifications_read,
+    complete_match, rate_match, get_my_ratings, get_my_rating, remove_journey, post_journey, get_traveler_profile, get_my_notifications, mark_notifications_read,
     plan_trip, get_email_status, block_user, unblock_user, get_blocked, report_user, create_share_link, get_shared_trip,
     book_relay, get_relay_plan, get_my_relay_plans, respond_relay_leg, replace_relay_leg, cancel_relay,
     get_impact_metrics, get_maps_config, get_trip_route,

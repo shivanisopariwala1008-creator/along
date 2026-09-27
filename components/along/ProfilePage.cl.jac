@@ -184,6 +184,7 @@ def:pub ProfilePage() -> JsxElement {
                         </div>
                     </div>
                     <h3>Your journeys</h3>
+                    <p className="journey-note">Posted journeys are visible to travelers they fit — we’ll notify you when someone new matches.</p>
                     {if len(trips) == 0 {
                         <p key="none" className="journeys-empty">
                             Nothing posted yet. <button className="link-button" onClick={lambda (e: MouseEvent) { nav("/journey/ride"); }}>Post a journey</button>
@@ -208,7 +209,7 @@ def:pub ProfilePage() -> JsxElement {
                                     </span>
                                     <span>
                                         <strong>{short_place(t.origin_name) + " → " + short_place(t.destination_name)}</strong>
-                                        <small>{flow_info(flow_of_trip(t))["title"] + " · " + trip_timing(t)}</small>
+                                        <small>{flow_info(flow_of_trip(t))["title"] + " · " + trip_timing(t) + (" · Ended" if t.expired else "")}</small>
                                     </span>
                                     <em>View matches <Icon name="chevron" size={14} /></em>
                                 </button>

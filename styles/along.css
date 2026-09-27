@@ -868,3 +868,20 @@ button.avatar { cursor: pointer; }
 .rental-spot-lists { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
 .rental-spot-lists .rental-spots { margin-top: 0; }
 .driver-toggle { margin-top: 12px; }
+
+/* Post this search so future travelers can find it */
+.post-panel { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin: 0 0 14px; border: 1px dashed var(--al-green); border-radius: 14px; background: var(--al-surface-soft); }
+.post-panel > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.post-panel strong { font-size: 13.5px; }
+.post-panel small { color: var(--al-muted); font-size: 12.5px; line-height: 1.45; }
+.post-panel > .btn { flex: none; min-height: 34px; padding: 6px 14px; }
+.post-icon { flex: none; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: white; color: var(--al-green); }
+.post-panel.big { align-items: flex-start; padding: 22px; border-style: solid; border-color: var(--al-line); background: white; box-shadow: var(--al-shadow-small); margin-top: 6px; }
+.post-panel.big strong { font-size: 17px; }
+.post-panel.big small { font-size: 13.5px; }
+.post-panel.big .post-icon { width: 42px; height: 42px; background: var(--al-surface-soft); }
+.post-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.post-panel.done { border-style: solid; border-color: #bfdcc9; background: #eef7f1; }
+.post-panel.done .post-icon { background: var(--al-green); color: white; }
+.post-panel .link-button { flex: none; font-size: 13px; }
+.journey-note { font-size: 12.5px; color: var(--al-muted); margin: -4px 0 10px; }

@@ -710,15 +710,12 @@ impl create_journey(
     trip.needs_driver = needs_driver and clean_mode == "rental";
     me +>:Posts:+> trip;
 
-    # Make sure there is always someone to match with in the demo.
-    seed_demo_network();
-    # Posting returns right away; the Matchmaker runs when the results page
-    # asks for matches (see run_agents), so nobody waits on notifications.
+    # A search stays private; post_journey publishes it and notifies matches.
     return jid(trip);
 }
 
 impl get_my_trips() -> list[TripView] {
-    return [_trip_view(t) for t in [_me() ->:Posts:->][?:Trip] if t.active];
+    return [_trip_view(t) for t in [_me() ->:Posts:->][?:Trip] if t.active and t.posted];
 }
 
 impl remove_journey(trip_id: str) -> bool {
@@ -784,6 +781,7 @@ def _trip_view(t: Trip) -> TripView {
         destination_lat=t.destination_lat, destination_lng=t.destination_lng,
         owner_rating=rating[0], owner_reviews=rating[1], round_trip=t.round_trip,
         return_date=t.return_date, space_needed=t.space_needed, needs_driver=t.needs_driver,
+        posted=t.posted, expired=_is_expired(t),
         age_min=t.age_min, age_max=t.age_max, gender_prefs=t.gender_prefs
     );
 }
@@ -1031,7 +1029,7 @@ impl RouteScout.inspect {
     self.scanned += 1;
     o = _origin_trip(self.origin_id);
     wanted = "PEER" if o.role == "PEER" else ("DRIVER" if o.role == "RIDER" else "RIDER");
-    if not here.active or here.role != wanted or here.mode != o.mode
+    if not _is_listed(here) or here.role != wanted or here.mode != o.mode
         or jid(here) == self.origin_id or here.owner_root == self.my_root
         or _ratee_key(here.owner_root, here.owner_handle) in self.blocked {
         skip;
@@ -1191,13 +1189,35 @@ impl Coordinator.decide {
 }
 
 impl run_agents(trip_id: str) -> AgentRunView {
-    run = _run_agents(trip_id, True);
-    posted = _load_trip(trip_id);
-    if posted is not None and not (posted as Trip).matchmaker_done {
-        (posted as Trip).matchmaker_done = True;
-        _notify_new_matches(posted as Trip, run.cards);
+    return _run_agents(trip_id, True);
+}
+
+impl post_journey(trip_id: str) -> int {
+    t = _load_trip(trip_id);
+    if t is None or (t as Trip).owner_root != _my_root_id() {
+        return 0;
     }
-    return run;
+    p = t as Trip;
+    p.posted = True;
+    p.active = True;
+    if p.matchmaker_done {
+        return 0;   # already announced once; don't notify people twice
+    }
+    p.matchmaker_done = True;
+    return _notify_new_matches(p, _run_agents(trip_id, False).cards);
+}
+
+# Visible to other people's searches: posted (or demo) and not in the past.
+def _is_listed(t: Trip) -> bool {
+    return t.active and (t.posted or t.is_demo) and not _is_expired(t);
+}
+
+def _is_expired(t: Trip) -> bool {
+    if t.recurring or not t.travel_date {
+        return False;
+    }
+    last = t.return_date if t.mode == "rental" and t.return_date else t.travel_date;
+    return last < datetime.date.today().isoformat();
 }
 
 # with_relays: also look for 2-ride routes (slower: needs road routes + places).
@@ -2278,7 +2298,7 @@ def _find_relays(o: Trip, direct_ids: set[str]) -> list[RelayView] {
     my_dep = _minutes_of_day(o.departure_time);
     drivers: list[tuple[Trip, str]] = [];
     for t in _public_trips() {
-        if not t.active or t.role != "DRIVER" or t.mode != "ride" or t.owner_root == _my_root_id()
+        if not _is_listed(t) or t.role != "DRIVER" or t.mode != "ride" or t.owner_root == _my_root_id()
             or jid(t) in direct_ids or _ratee_key(t.owner_root, t.owner_handle) in hidden
             or abs(_minutes_of_day(t.departure_time) - my_dep) > 150 or not _prefs_fit(o, t) {
             continue;

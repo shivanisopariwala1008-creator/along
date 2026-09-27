@@ -14,7 +14,7 @@ import from ...lib.along {
     flow_info, flow_of_trip, short_place, initials, rating_text, has_rating,
     when_text, meta_text, trip_timing, fmt_time, match_label
 }
-sv import from ...services.along { run_agents, get_match_results, get_my_trip, book_relay, TripView, MatchCardView, AgentRunView, AgentStepView, RelayView }
+sv import from ...services.along { run_agents, get_match_results, get_my_trip, book_relay, post_journey, TripView, MatchCardView, AgentRunView, AgentStepView, RelayView }
 
 # Keyed on the URL so /results?tripId=… and /matches never share stale state.
 def:pub ResultsRoute() -> JsxElement {
@@ -43,6 +43,9 @@ def:pub ResultsView() -> JsxElement {
         relays: list[RelayView] = [],
         relay_id: str = "",
         report_open: bool = False,
+        posted: bool = False,
+        posting: bool = False,
+        notified: int = -1,
         ticks: Ref[int] = Ref(0);
 
     nav = useNavigate();
@@ -54,6 +57,7 @@ def:pub ResultsView() -> JsxElement {
         try {
             if trip_id {
                 my_trip = await get_my_trip(trip_id);
+                posted = my_trip is not None and my_trip.posted;
                 run: AgentRunView = await run_agents(trip_id);
                 found = run.cards;
                 agent_steps = run.steps;
@@ -95,6 +99,14 @@ def:pub ResultsView() -> JsxElement {
     shown = [c for c in shown if c.overall_score >= min_score];
     sel = selected if selected < len(shown) else 0;
     focus = shown[sel] if len(shown) > 0 else None;
+    async def post_it -> None {
+        posting = True;
+        told: int = await post_journey(trip_id);
+        notified = told;
+        posted = True;
+        posting = False;
+    }
+
     route_trip = my_trip if my_trip is not None else (focus.my_trip if focus is not None else None);
     kind = flow_of_trip(route_trip);
     info = flow_info(kind);
@@ -123,7 +135,7 @@ def:pub ResultsView() -> JsxElement {
     } elif len(shown) == 0 and len(relays) > 0 {
         subtitle = str(len(relays)) + (" way" if len(relays) == 1 else " ways") + " to get there with two rides";
     } elif len(shown) == 0 {
-        subtitle = "Try expanding your distance or timing.";
+        subtitle = "No matches yet — post it and we’ll let you know.";
     } else {
         subtitle = (str(len(shown)) + (" promising match" if len(shown) == 1 else " promising matches"))
             + " · " + ("best match first" if sort_by == "fit" else "earliest first");
@@ -182,17 +194,28 @@ def:pub ResultsView() -> JsxElement {
                     {if status == "loading" or phase == "searching" {
                         <SearchSteps key="searching" step={step} />
                     } elif len(shown) == 0 and len(relays) == 0 {
-                        <div key="empty" className="empty-state">
-                            <span><Icon name="map" size={30} /></span>
-                            <h3>{"Couldn’t load matches" if status == "error" else "No close matches yet"}</h3>
-                            <p>{"Please try again in a moment." if status == "error" else "Widen your pickup distance or adjust timing to see more people."}</p>
-                            {if min_score > 0 {
-                                <button key="clear" className="btn btn-primary" onClick={lambda (e: MouseEvent) { set_filter(0); }}>Show all matches</button>
-                            } else {
-                                <button key="edit" className="btn btn-primary" onClick={lambda (e: MouseEvent) { nav("/journey/" + kind); }}>Expand search</button>
-                            }}
-                        </div>
+                        if min_score > 0 or status == "error" {
+                            <div key="empty" className="empty-state">
+                                <span><Icon name="map" size={30} /></span>
+                                <h3>{"Couldn’t load matches" if status == "error" else "No matches at this level"}</h3>
+                                <p>{"Please try again in a moment." if status == "error" else "Try showing all matches."}</p>
+                                {min_score > 0 and <button className="btn btn-primary" onClick={lambda (e: MouseEvent) { set_filter(0); }}>Show all matches</button>}
+                            </div>
+                        } elif trip_id {
+                            <PostPanel
+                                key="post" kind={kind} posted={posted} posting={posting} notified={notified}
+                                empty={True} onPost={lambda { post_it(); }} onEdit={lambda { nav("/journey/" + kind); }}
+                                onProfile={lambda { nav("/profile"); }}
+                            />
+                        }
                     } else {
+                        if trip_id and phase != "searching" {
+                            <PostPanel
+                                key="post" kind={kind} posted={posted} posting={posting} notified={notified}
+                                empty={False} onPost={lambda { post_it(); }} onEdit={lambda { nav("/journey/" + kind); }}
+                                onProfile={lambda { nav("/profile"); }}
+                            />
+                        }
                         if len(relays) > 0 and phase != "searching" {
                             <div key="relays" className="relay-list">
                                 <p className="relay-intro">{"No one drives the whole way — two rides get you there on time." if len(shown) == 0 else "Two rides fit your time better than the direct options below."}</p>
@@ -407,4 +430,56 @@ def:pub RelayCard(relay: RelayView, selected: bool, onSelect: Callable[[], None]
 
 def _rep(rating: float, reviews: int) -> str {
     return f"★ {rating:.1f} ({reviews})" if reviews > 0 else "New to Along";
+}
+
+# What posting means for each journey type.
+glob POST_COPY: dict[str, list[str]] = {
+    "ride": ["Post my ride request", "ride request", "Drivers heading your way will see it"],
+    "buddy": ["Post my ride offer", "ride offer", "Riders on your route will see it"],
+    "rental": ["Post my rental plan", "rental plan", "People renting for a similar trip will see it"],
+    "cab": ["Post my cab share", "cab share", "Travelers heading your way will see it"]
+};
+
+# Publish this search so future travelers can find it (and you get notified).
+#   empty=True: nothing matched — posting is the main next step.
+#   empty=False: results exist — a quiet "post it anyway" bar above them.
+def:pub PostPanel(
+    kind: str, posted: bool, posting: bool, notified: int, empty: bool,
+    onPost: Callable[[], None], onEdit: Callable[[], None], onProfile: Callable[[], None]
+) -> JsxElement {
+    copy = POST_COPY.get(kind, POST_COPY["ride"]);
+    if posted {
+        told = f" We let {notified} {'person' if notified == 1 else 'people'} who fit know." if notified > 0 else "";
+        return <div className={"post-panel done" + (" big" if empty else "")} role="status">
+            <span className="post-icon"><Icon name="check" size={18} /></span>
+            <div>
+                <strong>{"Your " + copy[1] + " is posted"}</strong>
+                <small>{copy[2] + " — we’ll notify you when someone fits." + told}</small>
+            </div>
+            <button className="link-button" onClick={lambda (e: MouseEvent) { onProfile(); }}>Manage</button>
+        </div>;
+    }
+    if empty {
+        return <div className="post-panel big">
+            <span className="post-icon"><Icon name="bell" size={20} /></span>
+            <div>
+                <strong>No one on this route yet</strong>
+                <small>{"Post your " + copy[1] + ". " + copy[2] + ", and we’ll notify you the moment someone fits."}</small>
+                <div className="post-actions">
+                    <button className="btn btn-primary" disabled={posting} onClick={lambda (e: MouseEvent) { onPost(); }}>
+                        {"Posting…" if posting else copy[0]} <Icon name="arrow" />
+                    </button>
+                    <button className="btn btn-secondary" onClick={lambda (e: MouseEvent) { onEdit(); }}>Edit search</button>
+                </div>
+            </div>
+        </div>;
+    }
+    return <div className="post-panel">
+        <span className="post-icon"><Icon name="bell" size={16} /></span>
+        <div>
+            <strong>Want more options?</strong>
+            <small>{"Post your " + copy[1] + " — we’ll notify you when new people fit."}</small>
+        </div>
+        <button className="btn btn-secondary" disabled={posting} onClick={lambda (e: MouseEvent) { onPost(); }}>{"Posting…" if posting else "Post it"}</button>
+    </div>;
 }

@@ -84,6 +84,7 @@ node Trip {
         return_date: str = "",                # rentals: when the car goes back
         space_needed: str = "",               # rentals when moving: how much cargo space
         needs_driver: bool = False,           # rentals: "I don't drive — someone else should"
+        posted: bool = False,                 # searches are private until the owner posts them
         matchmaker_done: bool = False,        # have others been told about this journey yet?
         # Who this traveler is happy to travel with (all journey types).
         age_min: int = 1,
@@ -270,7 +271,8 @@ obj TripView {
         origin_lat: float = 0.0, origin_lng: float = 0.0,
         destination_lat: float = 0.0, destination_lng: float = 0.0,
         owner_rating: float = 0.0, owner_reviews: int = 0, round_trip: bool = False,
-        return_date: str = "", space_needed: str = "", needs_driver: bool = False,
+        return_date: str = "", space_needed: str = "", needs_driver: bool = False, posted: bool = False,
+        expired: bool = False,
         age_min: int = 1, age_max: int = 100, gender_prefs: list[str] = [];
 }
 
@@ -586,6 +588,11 @@ def get_rental_spots(lat: float, lng: float) -> list[RentalSpotView];
 def get_my_trip(trip_id: str) -> TripView | None;
 
 def get_my_trips() -> list[TripView];
+
+# Publish a journey so others can find it; people it fits are notified, and
+# anyone who posts a fitting journey later notifies me. Returns how many
+# people were told.
+def post_journey(trip_id: str) -> int;
 
 # Take one of my journeys down: it stops matching and its open suggestions close.
 def remove_journey(trip_id: str) -> bool;
