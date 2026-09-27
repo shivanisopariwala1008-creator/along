@@ -5,11 +5,17 @@ import from "@jac/runtime" { useNavigate, jacLogout }
 import from .Icon { Icon }
 import from .AppHeader { AppHeader }
 import from ...lib.along { initials, plural, flow_info, flow_of_trip, short_place, trip_timing }
-sv import from ...services.along { get_my_profile, update_profile_details, get_my_trips, ProfileView, TripView }
+import from .AccountPages { auth_post }
+sv import from ...services.along { get_my_profile, update_profile_details, get_my_trips, get_blocked, unblock_user, get_my_relay_plans, get_email_status, ProfileView, TripView, BlockedView, RelayPlanView, EmailStatusView }
 
 def:pub ProfilePage() -> JsxElement {
     has profile: ProfileView | None = None,
         trips: list[TripView] = [],
+        blocked: list[BlockedView] = [],
+        plans: list[RelayPlanView] = [],
+        email_status: EmailStatusView | None = None,
+        verify_note: str = "",
+        verify_busy: bool = False,
         editing: bool = False,
         name_draft: str = "",
         region_draft: str = "",
@@ -22,6 +28,26 @@ def:pub ProfilePage() -> JsxElement {
     async can with entry {
         profile = await get_my_profile();
         trips = await get_my_trips();
+        blocked = await get_blocked();
+        plans = await get_my_relay_plans();
+        email_status = await get_email_status();
+    }
+
+    async def send_verification -> None {
+        if email_status is None or not email_status.email {
+            verify_note = "No email address on this account.";
+            return;
+        }
+        verify_busy = True;
+        result = await auth_post("/user/send-verification", {"identity": {"type": "email", "value": email_status.email}}, True);
+        verify_busy = False;
+        failed: str = (result["message"] or "Couldn’t send the email. Please try again.") as str;
+        verify_note = ("We sent a link to " + email_status.email + ". It expires in 24 hours.") if result["ok"] else failed;
+    }
+
+    async def unblock(key: str) -> None {
+        _ = await unblock_user(key);
+        blocked = [b for b in blocked if b.key != key];
     }
 
     def start_edit(e: MouseEvent) {
@@ -84,10 +110,10 @@ def:pub ProfilePage() -> JsxElement {
                         <div>
                             <h2>{name}</h2>
                             <p>{region + " · " + since}</p>
-                            {if p is not None and p.verified {
-                                <span key="v" className="verified-pill"><Icon name="check" /> Identity verified</span>
+                            {if email_status is not None and email_status.verified {
+                                <span key="v" className="verified-pill"><Icon name="check" /> Email verified</span>
                             } else {
-                                <span key="nv" className="verified-pill pending"><Icon name="shield" /> Verification not started</span>
+                                <span key="nv" className="verified-pill pending"><Icon name="shield" /> Email not verified yet</span>
                             }}
                         </div>
                         {not editing and <button className="btn btn-secondary" onClick={start_edit}>Edit profile</button>}
@@ -127,6 +153,16 @@ def:pub ProfilePage() -> JsxElement {
                         </p>
                     }}
                     <div className="journey-list">
+                        {for pl in plans {
+                            <button key={pl.id} className="journey-row" onClick={lambda (e: MouseEvent) { nav("/plans/" + pl.id); }}>
+                                <span className="flow-badge small green"><Icon name="pin" size={16} /></span>
+                                <span>
+                                    <strong>{pl.route_from.split(",")[0] + " → " + pl.route_to.split(",")[0]}</strong>
+                                    <small>{"2-ride trip · stop at " + pl.handoff_name + (" · needs your attention" if pl.needs_attention else "")}</small>
+                                </span>
+                                <em>View trip <Icon name="chevron" size={14} /></em>
+                            </button>
+                        }}
                         {for t in trips {
                             <button key={t.id} className="journey-row" onClick={lambda (e: MouseEvent) { nav("/results?tripId=" + t.id); }}>
                                 <span className={"flow-badge small " + flow_info(flow_of_trip(t))["accent"]}>
@@ -144,8 +180,16 @@ def:pub ProfilePage() -> JsxElement {
                     <div className="settings-list">
                         <div>
                             <span className="setting-icon"><Icon name="shield" /></span>
-                            <span><strong>Identity verification</strong><small>Verified privately · Never shown without mutual consent</small></span>
-                            <b>{"Complete" if p is not None and p.verified else "Coming soon"}</b>
+                            <span>
+                                <strong>Email verification</strong>
+                                <small>{(("Verified · " if email_status is not None and email_status.verified else "Not verified yet · ") + (email_status.email if email_status is not None else "")) if email_status is not None else "Checking…"}</small>
+                                {verify_note and <small className="verify-note">{verify_note}</small>}
+                            </span>
+                            {if email_status is not None and email_status.verified {
+                                <b key="ok">Verified</b>
+                            } else {
+                                <button key="send" className="btn btn-secondary" disabled={verify_busy} onClick={lambda (e: MouseEvent) { send_verification(); }}>{"Sending…" if verify_busy else "Verify email"}</button>
+                            }}
                         </div>
                         <div>
                             <span className="setting-icon"><Icon name="user" /></span>
@@ -168,6 +212,18 @@ def:pub ProfilePage() -> JsxElement {
                             </span>
                         </div>
                     </div>
+                    {if len(blocked) > 0 {
+                        <div key="blocked" className="blocked-list">
+                            <h3>Blocked travelers</h3>
+                            {for bl in blocked {
+                                <div key={bl.key} className="blocked-row">
+                                    <span className="avatar avatar-small muted">{initials(bl.handle)}</span>
+                                    <span><strong>{bl.handle}</strong><small>{"Blocked " + bl.since}</small></span>
+                                    <button className="btn btn-secondary" onClick={lambda (e: MouseEvent) { unblock(bl.key); }}>Unblock</button>
+                                </div>
+                            }}
+                        </div>
+                    }}
                     <button className="btn btn-ghost logout-button" onClick={logout}><Icon name="logout" /> Log out</button>
                 </section>
                 <aside className="trust-card">

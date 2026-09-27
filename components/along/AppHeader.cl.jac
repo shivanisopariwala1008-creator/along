@@ -131,7 +131,13 @@ def:pub NotificationBell() -> JsxElement {
             items = [x for x in items if x.id != n.id] + [];
             refresh(True);
         }
-        nav(("/chat/" if n.kind == "message" else "/matches/") + n.match_id);
+        if n.kind == "relay" and n.trip_id {
+            nav("/plans/" + n.trip_id);          # rider: open the 2-ride plan
+        } elif n.kind == "relay" or n.kind == "message" {
+            nav("/chat/" + n.match_id);          # driver: their leg lives in the chat
+        } else {
+            nav("/matches/" + n.match_id);
+        }
     }
 
     async def mark_all -> None {
@@ -167,7 +173,7 @@ def:pub NotificationBell() -> JsxElement {
                     {for n in items {
                         <li key={n.id} className={"" if n.read else "unread"}>
                             <button onClick={lambda (e: MouseEvent) { open_item(n); }}>
-                                <span className={"bell-icon " + n.kind}><Icon name={"chat" if n.kind == "message" else "spark"} size={16} /></span>
+                                <span className={"bell-icon " + n.kind}><Icon name={"chat" if n.kind == "message" else ("pin" if n.kind == "relay" else "spark")} size={16} /></span>
                                 <span>
                                     <strong>{n.title}</strong>
                                     <small>{n.body}</small>

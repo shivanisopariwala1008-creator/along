@@ -3,6 +3,7 @@ Signup is three awaited steps: create account, log in, save the display name."""
 
 import from "@jac/runtime" { Link, useNavigate, useLocation, jacLogin, jacSignup }
 import from .along.Icon { Icon }
+import from .along.AccountPages { auth_post }
 sv import from ..services.along { update_profile }
 
 def:pub AuthPage(mode: str = "login") -> JsxElement {
@@ -63,6 +64,10 @@ def:pub AuthPage(mode: str = "login") -> JsxElement {
             if is_signup {
                 _ = await update_profile(display_name.strip(), "");
             }
+            if is_signup {
+                # Send the verification email right away (also enables password reset).
+                _ = await auth_post("/user/send-verification", {"identity": {"type": "email", "value": clean_email}}, True);
+            }
         } except Exception as ex {
             error = "Something went wrong. Please try again.";
             busy = False;
@@ -105,6 +110,7 @@ def:pub AuthPage(mode: str = "login") -> JsxElement {
                 </div>
             </label>
             {error and <p className="form-error" role="alert">{error}</p>}
+            {not is_signup and <Link to="/forgot-password" className="forgot-link">Forgot password?</Link>}
             <button type="submit" className="btn btn-primary full-button" disabled={busy}>
                 {("Creating account…" if is_signup else "Logging in…") if busy else ("Create account" if is_signup else "Log in")}
             </button>

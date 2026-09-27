@@ -74,3 +74,30 @@ description = "Jac IDE snapshot for along-journeys"
 
 [jachammer]
 project_id = "prj_01b6686db5ee489ead1f1b6b77f242a1"
+
+# Installable app (PWA): name, colours; icons come from pwa_icons/.
+[plugins.client.pwa]
+theme_color = "#176b45"
+background_color = "#f8f7f2"
+
+[plugins.client.pwa.manifest]
+name = "Along — shared journeys"
+short_name = "Along"
+description = "Find people heading your way across Michigan: rides, rentals and cab shares."
+
+# Email (verification + password reset). Without SMTP settings, emails are
+# printed to the server log by services/console_emailer.jac. For real email
+# set EMAILER_PROVIDER=smtp plus the EMAILER_SMTP_* values (see .env.example).
+[plugins.scale.emailer]
+provider = "${EMAILER_PROVIDER:-services.console_emailer:ConsoleEmailer}"
+from_address = "${EMAILER_FROM:-Along <no-reply@along.app>}"
+
+[plugins.scale.emailer.smtp]
+host = "${EMAILER_SMTP_HOST:-smtp.gmail.com}"
+port = 587
+username = "${EMAILER_SMTP_USERNAME:-}"
+use_tls = true
+
+[plugins.scale.auth]
+verify_url_template = "${APP_URL:-http://localhost:8000}/verify-email?token={token}"
+reset_url_template = "${APP_URL:-http://localhost:8000}/reset-password?token={token}"

@@ -9,11 +9,13 @@ the server decides which side the caller is and what they may see.
 import from "@jac/runtime" { useNavigate, useParams, useEffect, __jacClearCache }
 import from .Icon { Icon }
 import from .MapCanvas { MapCanvas }
+import from .SafetyActions { SafetyDialog }
+import from .ShareTrip { share_trip }
 import from ...lib.along { flow_of_trip, initials, fmt_time, short_place, trip_timing }
 sv import from ...services.along {
     create_anonymous_connection, send_message, approve_identity_reveal, get_conversation,
     get_my_conversations, get_match_details, close_match, complete_match,
-    get_my_notifications, mark_notifications_read, NotificationView,
+    get_my_notifications, mark_notifications_read, respond_relay_leg, NotificationView,
     ConversationView, ConversationSummaryView, MatchDetailView, MatchCardView, TripView
 }
 
@@ -31,7 +33,10 @@ def:pub ChatView(match_id: str) -> JsxElement {
         search: str = "",
         draft: str = "",
         loading: bool = True,
-        busy: bool = False;
+        busy: bool = False,
+        menu_open: bool = False,
+        dialog: str = "",
+        toast: str = "";
 
     nav = useNavigate();
 
@@ -105,6 +110,22 @@ def:pub ChatView(match_id: str) -> JsxElement {
         nav("/chat");
     }
 
+    async def respond(accept: bool) -> None {
+        busy = True;
+        _ = await respond_relay_leg(match_id, accept);
+        __jacClearCache();
+        updated: ConversationView | None = await get_conversation(match_id);
+        if updated {
+            convo = updated;
+        }
+        busy = False;
+    }
+
+    async def share -> None {
+        menu_open = False;
+        toast = await share_trip(match_id);
+    }
+
     async def handle_complete -> None {
         busy = True;
         _ = await complete_match(match_id);
@@ -132,6 +153,9 @@ def:pub ChatView(match_id: str) -> JsxElement {
     completed = c is not None and c.match_status == "completed";
 
     return <div className="app-shell">
+        {if dialog and c is not None {
+            <SafetyDialog key="safety" match_id={match_id} handle={display_name} mode={dialog} onClose={lambda { dialog = ""; }} />
+        }}
         <main className={"chat-page" + ("" if match_id else " no-selection")}>
             <aside className="conversation-sidebar">
                 <div className="conversation-heading">
@@ -190,6 +214,16 @@ def:pub ChatView(match_id: str) -> JsxElement {
                         <div>
                             <button aria-label="View match" onClick={lambda (e: MouseEvent) { nav("/matches/" + match_id); }}><Icon name="map" /></button>
                             <button aria-label="View profile" title="View profile" onClick={lambda (e: MouseEvent) { nav("/people/" + match_id); }}><Icon name="user" /></button>
+                            <span className="menu-wrap">
+                                <button aria-label="More options" aria-expanded={menu_open} onClick={lambda (e: MouseEvent) { menu_open = not menu_open; }}><Icon name="dots" /></button>
+                                {if menu_open {
+                                    <div key="menu" className="pop-menu" role="menu">
+                                        <button role="menuitem" onClick={lambda (e: MouseEvent) { share(); }}><Icon name="share" size={16} /> Share my trip</button>
+                                        <button role="menuitem" onClick={lambda (e: MouseEvent) { menu_open = False; dialog = "report"; }}><Icon name="flag" size={16} /> Report</button>
+                                        <button role="menuitem" className="danger" onClick={lambda (e: MouseEvent) { menu_open = False; dialog = "block"; }}><Icon name="block" size={16} /> Block</button>
+                                    </div>
+                                }}
+                            </span>
                         </div>
                     </header>
                     <div key="banner" className="identity-banner">
@@ -202,6 +236,34 @@ def:pub ChatView(match_id: str) -> JsxElement {
                             <button className="btn btn-primary" onClick={handle_approve} disabled={busy}>Agree to reveal identity</button>
                         }}
                     </div>
+                    if c.i_am_driver_of_leg and c.relay_status in ["pending", "accepted", "declined"] {
+                        <div key="leg" className={"relay-banner " + c.relay_status}>
+                            <Icon name="pin" />
+                            <div>
+                                <strong>{"2-ride trip · you’re the " + ("first" if c.relay_leg == "first" else "second") + " ride"}</strong>
+                                <span>{("Drop-off at " if c.relay_leg == "first" else "Pickup at ") + c.relay_stop + " around " + fmt_time(c.relay_time)}</span>
+                            </div>
+                            {if c.relay_status == "pending" {
+                                <span key="btns" className="relay-banner-actions">
+                                    <button className="btn btn-secondary" disabled={busy} onClick={lambda (e: MouseEvent) { respond(False); }}>Can’t make it</button>
+                                    <button className="btn btn-primary" disabled={busy} onClick={lambda (e: MouseEvent) { respond(True); }}>Accept</button>
+                                </span>
+                            } else {
+                                <em key="st">{"Accepted" if c.relay_status == "accepted" else "You said you can’t make it"}</em>
+                            }}
+                        </div>
+                    }
+                    if c.relay_plan_id {
+                        plan_link = "/plans/" + c.relay_plan_id;
+                        <button key="plan" className="relay-banner rider" onClick={lambda (e: MouseEvent) { nav(plan_link); }}>
+                            <Icon name="pin" />
+                            <div><strong>Part of your 2-ride trip</strong><span>{"Stop: " + c.relay_stop + " · " + fmt_time(c.relay_time)}</span></div>
+                            <em>View trip plan →</em>
+                        </button>
+                    }
+                    if toast {
+                        <p key="toast" className="chat-toast" role="status">{toast}</p>
+                    }
                     <div key="messages" className="messages">
                         <div className="date-divider">TODAY</div>
                         <div className="system-message"><Icon name="shield" /> Along keeps this conversation anonymous until you both agree.</div>
@@ -215,7 +277,9 @@ def:pub ChatView(match_id: str) -> JsxElement {
                             </div>
                         }}
                         {for (i, m) in enumerate(c.messages) {
-                            if m.mine {
+                            if m.sender_anonymous_handle == "Along" {
+                                <div key={str(i)} className="system-message along-note"><Icon name="shield" /> {m.body}</div>
+                            } elif m.mine {
                                 <div key={str(i)} className="bubble-row mine">
                                     <div><p>{m.body}</p><time>{fmt_time(m.timestamp) + " · Delivered"}</time></div>
                                 </div>

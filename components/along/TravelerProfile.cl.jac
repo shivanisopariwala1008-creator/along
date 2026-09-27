@@ -9,6 +9,7 @@ you've both agreed to reveal identities.
 import from "@jac/runtime" { useNavigate, useParams }
 import from .Icon { Icon }
 import from .AppHeader { AppHeader }
+import from .SafetyActions { SafetyDialog }
 import from ...lib.along { initials }
 sv import from ...services.along { get_traveler_profile, TravelerProfileView, ReviewView }
 
@@ -20,7 +21,8 @@ def:pub TravelerProfileRoute() -> JsxElement {
 
 def:pub TravelerProfile(match_id: str) -> JsxElement {
     has profile: TravelerProfileView | None = None,
-        loading: bool = True;
+        loading: bool = True,
+        dialog: str = "";
 
     nav = useNavigate();
 
@@ -53,6 +55,9 @@ def:pub TravelerProfile(match_id: str) -> JsxElement {
 
     return <div className="app-shell">
         <AppHeader />
+        {if dialog {
+            <SafetyDialog key="safety" match_id={match_id} handle={title} mode={dialog} onClose={lambda { dialog = ""; }} />
+        }}
         <main className="profile-page page-width traveler-page">
             <button className="back-link" onClick={lambda (e: MouseEvent) { nav(-1); }}><Icon name="back" /> Back</button>
             <div className="profile-layout">
@@ -72,7 +77,7 @@ def:pub TravelerProfile(match_id: str) -> JsxElement {
                                         <small>{"· " + str(p.review_count) + (" review" if p.review_count == 1 else " reviews")}</small>
                                     </span>
                                 }}
-                                {p.revealed and p.verified and <span className="verified-pill"><Icon name="check" /> Identity verified</span>}
+                                {p.email_verified and <span className="verified-pill"><Icon name="check" /> Email verified</span>}
                             </div>
                             {if p.revealed and (p.home_region or p.member_since) {
                                 <p key="where" className="traveler-where">
@@ -145,6 +150,10 @@ def:pub TravelerProfile(match_id: str) -> JsxElement {
                     <div className="safe-note">
                         <Icon name="lock" />
                         <span>Exact addresses and contact details are never shown without mutual permission.</span>
+                    </div>
+                    <div className="safety-links">
+                        <button onClick={lambda (e: MouseEvent) { dialog = "report"; }}><Icon name="flag" size={14} /> Report</button>
+                        <button onClick={lambda (e: MouseEvent) { dialog = "block"; }}><Icon name="block" size={14} /> Block</button>
                     </div>
                 </aside>
             </div>

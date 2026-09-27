@@ -170,6 +170,7 @@ def _profile_view(me: User) -> ProfileView {
 }
 
 impl get_my_profile() -> ProfileView {
+    _sync_email_verified();
     return _profile_view(_me());
 }
 
@@ -561,8 +562,8 @@ impl create_journey(
 
     # Make sure there is always someone to match with in the demo.
     seed_demo_network();
-    # Tell everyone already travelling this way that a new match just appeared.
-    root.shared spawn Matchmaker(trip_id=jid(trip));
+    # Posting returns right away; the Matchmaker runs when the results page
+    # asks for matches (see run_agents), so nobody waits on notifications.
     return jid(trip);
 }
 
@@ -651,7 +652,11 @@ def _is_participant(m: Match) -> bool {
 }
 
 def _my_matches() -> list[Match] {
-    return [m for m in [root.shared-->][?:Match] if _is_participant(m)];
+    hidden = _blocked_keys();
+    return [
+        m for m in [root.shared-->][?:Match]
+        if _is_participant(m) and _other_key(m) not in hidden
+    ];
 }
 
 # Resolve a match id — only if the caller is one of its two participants.
@@ -661,7 +666,7 @@ def _find_match(match_id: str) -> Match | None {
     } except Exception {
         return None;
     }
-    if isinstance(obj_, Match) and _is_participant(obj_ as Match) {
+    if isinstance(obj_, Match) and _is_participant(obj_ as Match) and not _match_blocked(obj_ as Match) {
         return obj_ as Match;
     }
     return None;
@@ -779,7 +784,8 @@ impl RouteScout.inspect {
     o = _origin_trip(self.origin_id);
     wanted = "PEER" if o.role == "PEER" else ("DRIVER" if o.role == "RIDER" else "RIDER");
     if not here.active or here.role != wanted or here.mode != o.mode
-        or jid(here) == self.origin_id or here.owner_root == self.my_root {
+        or jid(here) == self.origin_id or here.owner_root == self.my_root
+        or _ratee_key(here.owner_root, here.owner_handle) in self.blocked {
         skip;
     }
     pair = _pair(o, here);
@@ -922,7 +928,13 @@ impl Coordinator.decide {
 }
 
 impl run_agents(trip_id: str) -> AgentRunView {
-    return _run_agents(trip_id, True);
+    run = _run_agents(trip_id, True);
+    posted = _load_trip(trip_id);
+    if posted is not None and not (posted as Trip).matchmaker_done {
+        (posted as Trip).matchmaker_done = True;
+        _notify_new_matches(posted as Trip, run.cards);
+    }
+    return run;
 }
 
 # with_relays: also look for 2-ride routes (slower: needs road routes + places).
@@ -934,7 +946,7 @@ def _run_agents(trip_id: str, with_relays: bool) -> AgentRunView {
     }
     shared = root.shared;
 
-    scout = RouteScout(origin_id=trip_id, my_root=me);
+    scout = RouteScout(origin_id=trip_id, my_root=me, blocked=list(_blocked_keys()));
     shared spawn scout;
     found = scout.candidates;
     schedule = ScheduleAgent(origin_id=trip_id, candidates=found);
@@ -1153,7 +1165,11 @@ def _convo_view(m: Match, convo: Conversation) -> ConversationView {
         other_approved=convo.driver_approved if role == "RIDER" else convo.rider_approved,
         messages=views, other_display_name=identity[0], other_verified=identity[1],
         other_phone=_other_phone(m, convo), match_status=m.status, mode=m.mode,
-        i_rated=m.rider_rated if role == "RIDER" else m.driver_rated
+        i_rated=m.rider_rated if role == "RIDER" else m.driver_rated,
+        relay_plan_id=m.relay_plan_id if role == "RIDER" else "",
+        relay_leg=m.relay_leg, relay_status=m.relay_status,
+        relay_stop=m.relay_stop, relay_time=m.relay_time,
+        i_am_driver_of_leg=role == "DRIVER" and m.relay_leg != ""
     );
 }
 
@@ -1471,6 +1487,7 @@ impl get_traveler_profile(match_id: str) -> TravelerProfileView | None {
         rating=float(f"{(total / count) if count else 0.0:.1f}"), review_count=count,
         is_new=count == 0, top_tags=top, reviews=reviews[::-1][:12] if not is_demo else reviews[:12],
         journeys_posted=len(theirs), journey_types=kinds, is_demo=is_demo,
+        email_verified=_has_badge(other_root),
         can_review=mt.status == "completed",
         already_reviewed=mt.rider_rated if role == "RIDER" else mt.driver_rated
     );
@@ -1509,7 +1526,7 @@ def _iso_now() -> str {
 # Create (or refresh) a notification for another user. `coalesce` folds a
 # burst of chat messages into one unread notification per conversation.
 def _notify(recipient: str, kind: str, title: str, body: str, match_id: str, trip_id: str, coalesce: bool = False) -> None {
-    if not recipient or recipient == "demo" or recipient == _my_root_id() {
+    if not recipient or recipient == "demo" or recipient == _my_root_id() or recipient in _blocked_keys() {
         return;
     }
     if coalesce {
@@ -1536,9 +1553,14 @@ impl Matchmaker.watch {
         skip;
     }
     p = posted as Trip;
-    run = _run_agents(self.trip_id, False);
+    self.notified = _notify_new_matches(p, _run_agents(self.trip_id, False).cards);
+}
+
+# Tell every existing traveler this new journey fits (score >= threshold).
+def _notify_new_matches(p: Trip, cards: list[MatchCardView]) -> int {
+    notified = 0;
     route = p.origin_name.split(",")[0] + " → " + p.destination_name.split(",")[0];
-    for card in run.cards[:NOTIFY_MAX_PER_POST] {
+    for card in cards[:NOTIFY_MAX_PER_POST] {
         other = card.other_trip;
         if other is None or card.overall_score < NOTIFY_MIN_SCORE {
             continue;
@@ -1556,8 +1578,9 @@ impl Matchmaker.watch {
             f"A {who} just posted {route} ({card.fit_label.lower()}). Along's agents think you'd travel well together.",
             card.id, jid(theirs)
         );
-        self.notified += 1;
+        notified += 1;
     }
+    return notified;
 }
 
 def _notification_time(n: NotificationView) -> str {
@@ -2184,4 +2207,522 @@ impl get_rental_spots(lat: float, lng: float) -> list[RentalSpotView] {
         ));
     }
     return spots;
+}
+
+# ---------------------------------------------------------------------------
+# Safety — block and report
+# ---------------------------------------------------------------------------
+
+# Key of the other participant of a match (same scheme as ratings).
+def _other_key(m: Match) -> str {
+    i_am_rider = m.rider_root == _my_root_id();
+    return _ratee_key(m.driver_root if i_am_rider else m.rider_root, m.driver_handle if i_am_rider else m.rider_handle);
+}
+
+# Everyone hidden from me: people I blocked, and people who blocked me.
+def _blocked_keys() -> set[str] {
+    me = _my_root_id();
+    keys: set[str] = set();
+    for b in [root.shared-->][?:Block] {
+        if b.blocker_key == me {
+            keys.add(b.blocked_key);
+        } elif b.blocked_key == me {
+            keys.add(b.blocker_key);
+        }
+    }
+    return keys;
+}
+
+def _match_blocked(m: Match) -> bool {
+    return _other_key(m) in _blocked_keys();
+}
+
+def _block(mt: Match) -> None {
+    me = _my_root_id();
+    key = _other_key(mt);
+    for b in [root.shared-->][?:Block] {
+        if b.blocker_key == me and b.blocked_key == key {
+            return;
+        }
+    }
+    i_am_rider = mt.rider_root == me;
+    blk = Block(
+        blocker_key=me, blocked_key=key,
+        blocked_handle=mt.driver_handle if i_am_rider else mt.rider_handle,
+        created_at=datetime.datetime.now().strftime("%b %d, %Y")
+    );
+    root.shared ++> blk;
+    grant(blk, level=ReadPerm);   # both sides' matching must see it
+    mt.status = "closed";
+}
+
+impl block_user(match_id: str) -> bool {
+    m = _find_match(match_id);
+    if m is None {
+        return False;
+    }
+    _block(m as Match);
+    return True;
+}
+
+impl unblock_user(key: str) -> bool {
+    me = _my_root_id();
+    for b in [root.shared-->][?:Block] {
+        if b.blocker_key == me and b.blocked_key == key {
+            b.blocker_key = "";          # neutralised; the node itself stays (edges intact)
+            b.blocked_key = "removed";
+            return True;
+        }
+    }
+    return False;
+}
+
+impl get_blocked() -> list[BlockedView] {
+    me = _my_root_id();
+    return [
+        BlockedView(key=b.blocked_key, handle=b.blocked_handle, since=b.created_at)
+        for b in [root.shared-->][?:Block] if b.blocker_key == me
+    ];
+}
+
+impl report_user(match_id: str, reason: str, details: str, also_block: bool) -> bool {
+    m = _find_match(match_id);
+    if m is None {
+        return False;
+    }
+    mt = m as Match;
+    i_am_rider = mt.rider_root == _my_root_id();
+    rep = Report(
+        reporter_root=_my_root_id(), reported_key=_other_key(mt),
+        reported_handle=mt.driver_handle if i_am_rider else mt.rider_handle,
+        match_id=jid(mt), reason=reason if reason in ["unsafe", "harassment", "spam", "no_show", "other"] else "other",
+        details=details.strip()[:2000], created_at=_iso_now()
+    );
+    root.shared ++> rep;     # not granted to anyone: reviewed by the Along team only
+    print(f"[safety] report filed: {rep.reason} about {rep.reported_handle}");
+    if also_block {
+        _block(mt);
+    }
+    return True;
+}
+
+# ---------------------------------------------------------------------------
+# Share my trip — a friend can follow the plan without an account
+# ---------------------------------------------------------------------------
+
+import from uuid { uuid4 }
+
+def _rating_label(root_id: str, handle: str, demo_rating: float, demo_reviews: int) -> str {
+    rep = _rating_summary(_ratee_key(root_id, handle), demo_rating, demo_reviews);
+    return f"★ {rep[0]:.1f} ({rep[1]} reviews)" if rep[1] else "New to Along";
+}
+
+def _clock(hhmm: str) -> str {
+    if not hhmm or ":" not in hhmm {
+        return hhmm;
+    }
+    h = int(hhmm.split(":")[0]);
+    return f"{(h % 12) or 12}:{hhmm.split(':')[1][:2]} {'PM' if h >= 12 else 'AM'}";
+}
+
+impl create_share_link(match_id: str) -> str {
+    m = _find_match(match_id);
+    if m is None {
+        return "";
+    }
+    mt = m as Match;
+    i_am_rider = mt.rider_root == _my_root_id();
+    mine = _load_trip(mt.rider_trip_id if i_am_rider else mt.driver_trip_id);
+    theirs = _load_trip(mt.driver_trip_id if i_am_rider else mt.rider_trip_id);
+    if mine is None or theirs is None {
+        return "";
+    }
+    me_t = mine as Trip;
+    ot = theirs as Trip;
+    me = _me();
+    day = "Weekdays" if me_t.recurring else (me_t.travel_date or "");
+    link = ShareLink(
+        token=uuid4().hex, owner_root=_my_root_id(), created_at=_iso_now(),
+        traveler=(me.display_name or "Your friend").split(" ")[0],
+        kind={"ride": "Ride", "rental": "Shared rental", "cab": "Shared cab"}.get(mt.mode, "Ride"),
+        route_from=me_t.origin_name, route_to=me_t.destination_name,
+        when=(day + " · " if day else "") + "leaves " + _clock(ot.departure_time if ot.role == "DRIVER" else me_t.departure_time),
+        driver=ot.owner_handle,
+        driver_rating=_rating_label(ot.owner_root, ot.owner_handle, ot.demo_rating, ot.demo_reviews),
+        arrive=_clock(me_t.arrival_deadline)
+    );
+    # A booked 2-ride trip shares both legs and the stop.
+    plan = _plan_for_match(jid(mt));
+    if plan is not None {
+        p = plan as RelayPlan;
+        link.handoff = p.handoff_name;
+        link.handoff_time = _clock(p.handoff_time);
+        link.arrive = _clock(p.arrive_time);
+        first = _load_match_any(p.leg1_match_id);
+        second = _load_match_any(p.leg2_match_id);
+        if first is not None and second is not None {
+            f = first as Match;
+            s2 = second as Match;
+            link.driver = f.driver_handle;
+            link.second_driver = s2.driver_handle;
+            link.driver_rating = _rating_label(f.driver_root, f.driver_handle, 0.0, 0);
+            link.second_rating = _rating_label(s2.driver_root, s2.driver_handle, 0.0, 0);
+        }
+    }
+    root.shared ++> link;
+    grant(link, level=ReadPerm);   # readable by token on the public share page
+    return link.token;
+}
+
+impl get_shared_trip(token: str) -> SharedTripView | None {
+    if not token {
+        return None;
+    }
+    for l in [root.shared-->][?:ShareLink] {
+        if l.token == token and not l.revoked {
+            return SharedTripView(
+                traveler=l.traveler, kind=l.kind, route_from=l.route_from, route_to=l.route_to,
+                when=l.when, driver=l.driver, driver_rating=l.driver_rating, handoff=l.handoff,
+                handoff_time=l.handoff_time, second_driver=l.second_driver,
+                second_rating=l.second_rating, arrive=l.arrive, created_at=l.created_at
+            );
+        }
+    }
+    return None;
+}
+
+# ---------------------------------------------------------------------------
+# 2-ride trips (RelayPlan)
+#
+# Privacy: the plan lives on the rider's side only. Each driver's Match holds
+# just their own leg (stop + time + status), and system messages in each chat
+# describe only that leg — a driver never learns who drives the other leg.
+# ---------------------------------------------------------------------------
+
+def _load_match_any(match_id: str) -> Match | None {
+    try {
+        obj_ = jobj(match_id);
+    } except Exception {
+        return None;
+    }
+    return obj_ as Match if isinstance(obj_, Match) else None;
+}
+
+def _plan_for_match(match_id: str) -> RelayPlan | None {
+    me = _my_root_id();
+    for p in [root.shared-->][?:RelayPlan] {
+        if p.rider_root == me and p.status == "active" and (p.leg1_match_id == match_id or p.leg2_match_id == match_id) {
+            return p;
+        }
+    }
+    return None;
+}
+
+def _load_plan(plan_id: str) -> RelayPlan | None {
+    try {
+        obj_ = jobj(plan_id);
+    } except Exception {
+        return None;
+    }
+    if isinstance(obj_, RelayPlan) and (obj_ as RelayPlan).rider_root == _my_root_id() {
+        return obj_ as RelayPlan;
+    }
+    return None;
+}
+
+def _system_message(m: Match, text: str) -> None {
+    convo = _find_conversation(m);
+    if convo is None {
+        convo = _open_conversation(m);
+    }
+    _add_message(convo as Conversation, "Along", "system", text, _now());
+}
+
+def _open_conversation(m: Match) -> Conversation {
+    existing = _find_conversation(m);
+    if existing is not None {
+        return existing as Conversation;
+    }
+    convo = Conversation(status="anonymous", identity_revealed=False, created_at=_now());
+    m +>:Opens:+> convo;
+    _share_with(convo, _other_root(m), WritePerm);
+    if m.status == "suggested" {
+        m.status = "connected";
+    }
+    return convo;
+}
+
+def _leg_text(leg: str, stop: str, when: str) -> str {
+    if leg == "first" {
+        return f"This rider wants a 2-ride trip. You'd be the first ride: pick them up on your route and drop them at {stop} around {_clock(when)}. Please accept or let them know you can't make it.";
+    }
+    return f"This rider wants a 2-ride trip. You'd be the second ride: pick them up at {stop} around {_clock(when)} and take them on along your route. Please accept or let them know you can't make it.";
+}
+
+def _attach_leg(m: Match, plan_id: str, leg: str, stop: str, when: str) -> None {
+    m.relay_plan_id = plan_id;
+    m.relay_leg = leg;
+    m.relay_status = "pending";
+    m.relay_stop = stop;
+    m.relay_time = when;
+    _system_message(m, _leg_text(leg, stop, when));
+    if _other_root(m) == "demo" {
+        # Demo travelers can't click Accept; they always say yes.
+        m.relay_status = "accepted";
+        _system_message(m, f"{m.driver_handle} accepted the {'first' if leg == 'first' else 'second'} ride.");
+        return;
+    }
+    _notify(
+        _other_root(m), "relay",
+        "2-ride trip request: you'd be the " + ("first" if leg == "first" else "second") + " ride",
+        ("Drop-off" if leg == "first" else "Pickup") + f" at {stop} around {_clock(when)}. Open the chat to accept.",
+        jid(m), ""
+    );
+}
+
+impl book_relay(
+    leg1_match_id: str, leg2_match_id: str, handoff_name: str, handoff_address: str,
+    handoff_lat: float, handoff_lng: float, handoff_time: str, pickup_time: str,
+    wait_min: int, arrive_time: str
+) -> str {
+    a = _find_match(leg1_match_id);
+    b = _find_match(leg2_match_id);
+    if a is None or b is None or leg1_match_id == leg2_match_id {
+        return "";
+    }
+    first = a as Match;
+    second = b as Match;
+    me = _my_root_id();
+    if first.rider_root != me or second.rider_root != me {
+        return "";   # only the rider books a 2-ride trip
+    }
+    existing = _plan_for_match(leg1_match_id);
+    if existing is not None and (existing as RelayPlan).leg2_match_id == leg2_match_id {
+        return jid(existing as RelayPlan);
+    }
+    stop = handoff_name.strip()[:120] or "the meeting point";
+    plan = RelayPlan(
+        rider_root=me, rider_trip_id=first.rider_trip_id,
+        leg1_match_id=leg1_match_id, leg2_match_id=leg2_match_id,
+        handoff_name=stop, handoff_address=handoff_address.strip()[:200],
+        handoff_lat=handoff_lat, handoff_lng=handoff_lng, handoff_time=handoff_time[:5],
+        pickup_time=pickup_time[:5], wait_min=wait_min, arrive_time=arrive_time[:5],
+        created_at=_iso_now()
+    );
+    root.shared ++> plan;           # not granted to the drivers
+    pid = jid(plan);
+    _attach_leg(first, pid, "first", stop, handoff_time[:5]);
+    _attach_leg(second, pid, "second", stop, handoff_time[:5]);
+    return pid;
+}
+
+def _leg_view(m: Match, leg: str, plan: RelayPlan) -> RelayLegView {
+    other = _load_trip(m.driver_trip_id);
+    rating = "New to Along";
+    depart = "";
+    if other is not None {
+        t = other as Trip;
+        rating = _rating_label(t.owner_root, t.owner_handle, t.demo_rating, t.demo_reviews);
+        depart = _clock(plan.pickup_time) if leg == "first" else _clock(plan.handoff_time);
+    }
+    return RelayLegView(
+        match_id=jid(m), leg=leg, handle=m.driver_handle, rating=rating,
+        status=m.relay_status or "pending", depart=depart,
+        arrive=_clock(plan.handoff_time) if leg == "first" else _clock(plan.arrive_time)
+    );
+}
+
+def _plan_view(p: RelayPlan, with_options: bool) -> RelayPlanView {
+    trip = _load_trip(p.rider_trip_id);
+    view = RelayPlanView(
+        id=jid(p), status=p.status, handoff_name=p.handoff_name, handoff_address=p.handoff_address,
+        handoff_lat=p.handoff_lat, handoff_lng=p.handoff_lng, handoff_time=_clock(p.handoff_time),
+        pickup_time=_clock(p.pickup_time), wait_min=p.wait_min, arrive_time=_clock(p.arrive_time),
+        route_from=(trip as Trip).origin_name if trip is not None else "",
+        route_to=(trip as Trip).destination_name if trip is not None else ""
+    );
+    legs: list[RelayLegView] = [];
+    dropped = "";
+    for (leg, mid) in [("first", p.leg1_match_id), ("second", p.leg2_match_id)] {
+        m = _load_match_any(mid);
+        if m is not None {
+            lv = _leg_view(m as Match, leg, p);
+            legs.append(lv);
+            if lv.status == "declined" {
+                dropped = leg;
+            }
+        }
+    }
+    view.legs = legs;
+    view.needs_attention = p.status == "active" and dropped != "";
+    if with_options and view.needs_attention and trip is not None {
+        # Keep the leg that's still on; offer every relay that reuses it,
+        # plus direct rides — the rider chooses, nothing auto-cancels.
+        o = trip as Trip;
+        kept = p.leg2_match_id if dropped == "first" else p.leg1_match_id;
+        dropped_id = p.leg1_match_id if dropped == "first" else p.leg2_match_id;
+        run = _run_agents(p.rider_trip_id, False);
+        options = [
+            r for r in _find_relays(o, run.cards)
+            if (r.leg2_match_id == kept if dropped == "first" else r.leg1_match_id == kept)
+            and r.leg1_match_id != dropped_id and r.leg2_match_id != dropped_id
+        ];
+        view.alternatives = options[:3];
+        view.direct_options = [c for c in run.cards if c.overall_score >= 50 and c.id != dropped_id][:3];
+    }
+    return view;
+}
+
+impl get_relay_plan(plan_id: str) -> RelayPlanView | None {
+    p = _load_plan(plan_id);
+    return _plan_view(p as RelayPlan, True) if p is not None else None;
+}
+
+impl get_my_relay_plans() -> list[RelayPlanView] {
+    me = _my_root_id();
+    return [_plan_view(p, False) for p in [root.shared-->][?:RelayPlan] if p.rider_root == me and p.status == "active"];
+}
+
+impl respond_relay_leg(match_id: str, accept: bool) -> bool {
+    m = _find_match(match_id);
+    if m is None {
+        return False;
+    }
+    mt = m as Match;
+    if _my_role(mt) != "DRIVER" or not mt.relay_leg or mt.relay_status not in ["pending", "accepted"] {
+        return False;
+    }
+    mt.relay_status = "accepted" if accept else "declined";
+    which = "first" if mt.relay_leg == "first" else "second";
+    if accept {
+        _system_message(mt, f"{mt.driver_handle} accepted the {which} ride.");
+        _notify(mt.rider_root, "relay", f"{mt.driver_handle} accepted your {which} ride",
+            f"Meet at {mt.relay_stop} around {_clock(mt.relay_time)}.", jid(mt), mt.relay_plan_id);
+    } else {
+        _system_message(mt, f"{mt.driver_handle} can't make the {which} ride. Your other ride is still on — Along has options for you.");
+        _notify(mt.rider_root, "relay", f"{mt.driver_handle} can't make your {which} ride",
+            "Your other ride is still booked. Open your trip to pick another option.", jid(mt), mt.relay_plan_id);
+    }
+    return True;
+}
+
+impl replace_relay_leg(plan_id: str, leg: str, new_match_id: str, handoff_name: str, handoff_address: str,
+    handoff_lat: float, handoff_lng: float, handoff_time: str, arrive_time: str, wait_min: int) -> bool {
+    p = _load_plan(plan_id);
+    n = _find_match(new_match_id);
+    if p is None or n is None or leg not in ["first", "second"] {
+        return False;
+    }
+    plan = p as RelayPlan;
+    new_m = n as Match;
+    old = _load_match_any(plan.leg1_match_id if leg == "first" else plan.leg2_match_id);
+    if old is not None {
+        (old as Match).relay_status = "replaced";
+        _system_message(old as Match, "The rider changed their plan, so this ride is no longer needed. Thanks!");
+    }
+    stop = handoff_name.strip()[:120] or plan.handoff_name;
+    stop_changed = stop != plan.handoff_name or handoff_time[:5] != plan.handoff_time;
+    plan.handoff_name = stop;
+    plan.handoff_address = handoff_address.strip()[:200];
+    plan.handoff_lat = handoff_lat;
+    plan.handoff_lng = handoff_lng;
+    plan.handoff_time = handoff_time[:5];
+    plan.arrive_time = arrive_time[:5] or plan.arrive_time;
+    plan.wait_min = wait_min;
+    if leg == "first" {
+        plan.leg1_match_id = new_match_id;
+    } else {
+        plan.leg2_match_id = new_match_id;
+    }
+    _attach_leg(new_m, plan_id, leg, stop, plan.handoff_time);
+    # The driver who stayed only hears about their own stop/time, if it moved.
+    kept = _load_match_any(plan.leg2_match_id if leg == "first" else plan.leg1_match_id);
+    if kept is not None and stop_changed {
+        k = kept as Match;
+        k.relay_stop = stop;
+        k.relay_time = plan.handoff_time;
+        _system_message(k, f"Update: the meeting point is now {stop} around {_clock(plan.handoff_time)}.");
+    }
+    return True;
+}
+
+impl cancel_relay(plan_id: str) -> bool {
+    p = _load_plan(plan_id);
+    if p is None {
+        return False;
+    }
+    plan = p as RelayPlan;
+    plan.status = "cancelled";
+    for mid in [plan.leg1_match_id, plan.leg2_match_id] {
+        m = _load_match_any(mid);
+        if m is not None and (m as Match).relay_status in ["pending", "accepted"] {
+            (m as Match).relay_status = "cancelled";
+            _system_message(m as Match, "The rider cancelled this 2-ride trip. Thanks for offering!");
+        }
+    }
+    return True;
+}
+
+# ---------------------------------------------------------------------------
+# Email verification status — read from the login account (jac-scale), then
+# mirrored onto the profile and a public badge.
+# ---------------------------------------------------------------------------
+
+import from jac_scale.user_manager { JacScaleUserManager }
+
+glob _USER_MANAGER: list[any] = [];
+
+def _user_manager() -> any {
+    if len(_USER_MANAGER) == 0 {
+        _USER_MANAGER.append(JacScaleUserManager(base_path=Jac.get_base_path_dir()));
+    }
+    return _USER_MANAGER[0];
+}
+
+# (email, verified) for the calling user's login account.
+def _my_email_identity() -> tuple[str, bool] {
+    me = _my_root_id().replace("-", "");
+    try {
+        for u in _user_manager().list_all_users(1000, 0) {
+            if str(u.get("root_id", "")).replace("-", "") == me {
+                for ident in u.get("identities", []) {
+                    if ident.get("type") == "email" {
+                        return (str(ident.get("value_normalized") or ident.get("value_raw") or ""), bool(ident.get("verified")));
+                    }
+                }
+            }
+        }
+    } except Exception as e {
+        print(f"[verify] could not read account: {e}");
+    }
+    return ("", False);
+}
+
+def _has_badge(root_key: str) -> bool {
+    for b in [root.shared-->][?:VerifiedBadge] {
+        if b.user_key == root_key {
+            return True;
+        }
+    }
+    return False;
+}
+
+def _sync_email_verified() -> tuple[str, bool] {
+    status = _my_email_identity();
+    me = _me();
+    ok: bool = status[1] as bool;
+    if ok and not me.verified {
+        me.verified = True;
+    }
+    if ok and not _has_badge(_my_root_id()) {
+        badge = VerifiedBadge(user_key=_my_root_id(), since=datetime.datetime.now().strftime("%b %Y"));
+        root.shared ++> badge;
+        grant(badge, level=ReadPerm);
+    }
+    return status;
+}
+
+impl get_email_status() -> EmailStatusView {
+    status = _sync_email_verified();
+    return EmailStatusView(email=status[0] as str, verified=status[1] as bool);
 }

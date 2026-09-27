@@ -14,7 +14,7 @@ import from ...lib.along {
     flow_info, flow_of_trip, short_place, initials, rating_text, has_rating,
     when_text, meta_text, trip_timing, fmt_time, match_label
 }
-sv import from ...services.along { run_agents, get_match_results, get_my_trip, TripView, MatchCardView, AgentRunView, AgentStepView, RelayView }
+sv import from ...services.along { run_agents, get_match_results, get_my_trip, book_relay, TripView, MatchCardView, AgentRunView, AgentStepView, RelayView }
 
 # Keyed on the URL so /results?tripId=… and /matches never share stale state.
 def:pub ResultsRoute() -> JsxElement {
@@ -318,7 +318,36 @@ def:pub ResultCard(
 
 # A 2-ride route: driver A -> AI-picked handoff spot -> driver B.
 def:pub RelayCard(relay: RelayView, selected: bool, onSelect: Callable[[], None], onMessage: Callable[[str], None]) -> JsxElement {
+    has booking: bool = False,
+        error: str = "";
+
+    nav = useNavigate();
     h = relay.handoff;
+
+    async def book -> None {
+        booking = True;
+        # Local names match book_relay's parameters.
+        leg1_match_id = relay.leg1_match_id;
+        leg2_match_id = relay.leg2_match_id;
+        handoff_name = h.name if h is not None else "";
+        handoff_address = h.address if h is not None else "";
+        handoff_lat = h.lat if h is not None else 0.0;
+        handoff_lng = h.lng if h is not None else 0.0;
+        handoff_time = relay.handoff_time;
+        pickup_time = relay.pickup_time;
+        wait_min = relay.wait_min;
+        arrive_time = relay.arrive_time;
+        plan_id: str = await book_relay(
+            leg1_match_id, leg2_match_id, handoff_name, handoff_address, handoff_lat,
+            handoff_lng, handoff_time, pickup_time, wait_min, arrive_time
+        );
+        booking = False;
+        if plan_id {
+            nav("/plans/" + plan_id);
+        } else {
+            error = "Couldn’t book this trip. Please try again.";
+        }
+    }
     maps_url = ("https://www.google.com/maps/search/?api=1&query=" + str(h.lat) + "," + str(h.lng)) if h is not None else "";
 
     def msg1(e: MouseEvent) {
@@ -363,9 +392,13 @@ def:pub RelayCard(relay: RelayView, selected: bool, onSelect: Callable[[], None]
                 </div>
             </li>
         </ol>
+        {error and <p className="form-error">{error}</p>}
         <div className="card-actions">
-            <button className="btn btn-secondary" onClick={msg1}>{"Message " + relay.leg1_handle}</button>
-            <button className="btn btn-primary" onClick={msg2}>{"Message " + relay.leg2_handle} <Icon name="chat" /></button>
+            <button className="btn btn-secondary" onClick={msg1}>{"Ask " + relay.leg1_handle}</button>
+            <button className="btn btn-secondary" onClick={msg2}>{"Ask " + relay.leg2_handle}</button>
+            <button className="btn btn-primary" disabled={booking} onClick={lambda (e: MouseEvent) { e.stopPropagation(); book(); }}>
+                {"Booking…" if booking else "Book both rides"} <Icon name="arrow" />
+            </button>
         </div>
     </article>;
 }
