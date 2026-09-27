@@ -12,9 +12,16 @@ glob MICHIGAN_CENTER: dict[str, float] = {"lat": 42.6, "lng": -83.6};
 def:pub GoogleMapView(
     api_key: str, map_id: str, my_trip: TripView | None, my_route: RouteView | None,
     other_route: RouteView | None, cards: list[MatchCardView], selected: int,
-    onSelect: Callable[[int], None], kind: str = "ride"
+    onSelect: Callable[[int], None], kind: str = "ride", phase: str = "ready"
 ) -> JsxElement {
     info = flow_info(kind);
+    origin: list[float] = [my_trip.origin_lat, my_trip.origin_lng] if my_trip is not None else [];
+    trace: list[list[float]] = my_route.points if my_route is not None and len(my_route.points) > 1 else (
+        [origin, [my_trip.destination_lat, my_trip.destination_lng]] if my_trip is not None else []
+    );
+    targets: list[list[float]] = [
+        [c.other_trip.origin_lat, c.other_trip.origin_lng] for c in cards if c.other_trip is not None
+    ];
     lines: list[dict] = [];
     if my_route is not None and len(my_route.points) > 1 {
         # Dark ink so the route stands out against Google's green "clear" traffic.
@@ -32,6 +39,7 @@ def:pub GoogleMapView(
             gestureHandling="greedy" disableDefaultUI={True} zoomControl={True}
         >
             <RouteLines lines={lines} signature={signature} />
+            <SearchOverlay origin={origin} trace={trace} targets={targets} phase={phase} />
             {if my_trip is not None {
                 <AdvancedMarker key="a" position={{"lat": my_trip.origin_lat, "lng": my_trip.origin_lng}} title="Your start">
                     <span className="trip-end start">A</span>
@@ -44,6 +52,7 @@ def:pub GoogleMapView(
                 if c.other_trip is not None {
                     <AdvancedMarker
                         key={c.id} title={c.other_handle} zIndex={10 if selected == i else 1}
+                        className={"gm-pop" if phase == "revealing" else ""}
                         position={{"lat": c.other_trip.origin_lat, "lng": c.other_trip.origin_lng}}
                         onClick={lambda { onSelect(i); }}
                     >
@@ -117,6 +126,111 @@ def:pub RouteLines(lines: list[dict], signature: str) -> JsxElement {
     }, [gmap, signature]);
 
     return <span className="route-lines" hidden={True} />;
+}
+
+# Scan dots scattered around the route while searching (degrees, ~5-9 km).
+glob PROBE_DEG: list[list[float]] = [
+    [0.06, -0.08], [-0.05, 0.07], [0.08, 0.06], [-0.07, -0.06], [0.04, 0.09],
+    [-0.04, -0.1], [0.09, -0.02], [-0.09, 0.03], [0.03, -0.07], [-0.03, 0.08],
+];
+
+# The map-side half of the search animation, drawn with plain Google Maps
+# overlays: searching = route trace + radar pulse + blinking scan dots;
+# revealing = graph edges growing from your start to each match, one by one.
+def:pub SearchOverlay(origin: list[float], trace: list[list[float]], targets: list[list[float]], phase: str) -> JsxElement {
+    gmap: any = useMap();
+    sig = phase + ":" + str(len(trace)) + ":" + str(len(targets)) + ":" + (f"{origin[0]:.3f}" if len(origin) == 2 else "none");
+
+    useEffect(lambda {
+        if not gmap or len(origin) != 2 or phase == "ready" {
+            return lambda { };
+        }
+        g: any = window.google;  # jac:ignore[E1030]
+        drawn: list[any] = [];
+        timers: list[float] = [];
+        home = {"lat": origin[0], "lng": origin[1]};
+        pulse: dict[str, float] = {"r": 0.0};
+        at: dict[str, int] = {"i": 0};
+
+        if phase == "searching" {
+            radar = new(g.maps.Circle, {  # jac:ignore[E1053]
+                "center": home, "radius": 100, "map": gmap, "clickable": False, "zIndex": 40,
+                "strokeColor": "#176b45", "strokeWeight": 2, "fillColor": "#c9e96c", "fillOpacity": 0.3
+            });
+            drawn.append(radar);
+            timers.append(setInterval(lambda {  # jac:ignore[W2001]
+                pulse["r"] = (pulse["r"] + 350.0) if pulse["r"] < 15000.0 else 0.0;
+                fade = 1.0 - pulse["r"] / 15000.0;
+                radar.setRadius(pulse["r"]);
+                radar.setOptions({"fillOpacity": 0.3 * fade, "strokeOpacity": 0.9 * fade});
+            }, 40));
+
+            path = [{"lat": p[0], "lng": p[1]} for p in trace];
+            if len(path) > 1 {
+                tracer = new(g.maps.Polyline, {  # jac:ignore[E1053]
+                    "path": [], "map": gmap, "zIndex": 50, "clickable": False,
+                    "strokeColor": "#c9e96c", "strokeWeight": 7, "strokeOpacity": 1
+                });
+                drawn.append(tracer);
+                stride = max(1, int(len(path) / 70));
+                timers.append(setInterval(lambda {  # jac:ignore[W2001]
+                    at["i"] = (at["i"] + stride) if at["i"] < len(path) else 0;
+                    tracer.setPath(path[0:at["i"]]);
+                }, 30));
+            }
+
+            for (k, off) in enumerate(PROBE_DEG) {
+                base = trace[min(int(k * (len(trace) - 1) / (len(PROBE_DEG) - 1)), len(trace) - 1)] if len(trace) > 0 else origin;
+                probe = new(g.maps.Circle, {  # jac:ignore[E1053]
+                    "center": {"lat": base[0] + off[0], "lng": base[1] + off[1]}, "radius": 1400,
+                    "map": gmap, "clickable": False, "zIndex": 45, "strokeOpacity": 0,
+                    "fillColor": "#386fa4", "fillOpacity": 0.0
+                });
+                drawn.append(probe);
+                timers.append(setInterval(lambda {  # jac:ignore[W2001]
+                    probe.setOptions({"fillOpacity": 0.7 if probe.get("fillOpacity") < 0.3 else 0.12});
+                }, 520 + k * 70));
+            }
+        }
+
+        if phase == "revealing" {
+            for (k, t) in enumerate(targets[0:6]) {
+                timers.append(setTimeout(lambda {  # jac:ignore[W2001]
+                    link = new(g.maps.Polyline, {  # jac:ignore[E1053]
+                        "path": [home, home], "map": gmap, "zIndex": 55, "clickable": False,
+                        "strokeColor": "#176b45", "strokeWeight": 3, "strokeOpacity": 0.9, "geodesic": True
+                    });
+                    dot = new(g.maps.Circle, {  # jac:ignore[E1053]
+                        "center": {"lat": t[0], "lng": t[1]}, "radius": 900, "map": gmap, "zIndex": 56,
+                        "clickable": False, "strokeColor": "#176b45", "strokeWeight": 2,
+                        "fillColor": "#c9e96c", "fillOpacity": 0.8
+                    });
+                    drawn.append(link);
+                    drawn.append(dot);
+                    grow: dict[str, int] = {"f": 0};
+                    timers.append(setInterval(lambda {  # jac:ignore[W2001]
+                        if grow["f"] < 12 {
+                            grow["f"] = grow["f"] + 1;
+                            f = grow["f"] / 12;
+                            link.setPath([home, {"lat": origin[0] + (t[0] - origin[0]) * f, "lng": origin[1] + (t[1] - origin[1]) * f}]);
+                        }
+                    }, 25));
+                }, k * 420));
+            }
+        }
+
+        return lambda {
+            for tm in timers {
+                clearInterval(tm);
+                clearTimeout(tm);
+            }
+            for o in drawn {
+                o.setMap(None);
+            }
+        };
+    }, [gmap, sig]);
+
+    return <span className="search-overlay" hidden={True} />;
 }
 
 def _signature(r: RouteView | None) -> str {

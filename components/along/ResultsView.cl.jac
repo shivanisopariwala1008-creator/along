@@ -6,6 +6,7 @@
 """
 
 import from "@jac/runtime" { useNavigate, useLocation }
+import from react { useEffect }
 import from .Icon { Icon }
 import from .AppHeader { AppHeader }
 import from .MapCanvas { MapCanvas }
@@ -34,26 +35,54 @@ def:pub ResultsView() -> JsxElement {
         view: str = "list",
         sort_by: str = "fit",
         min_score: int = 0,
-        filters_open: bool = False;
+        filters_open: bool = False,
+        # searching -> revealing -> ready: drives the map/list search animation.
+        phase: str = "searching" if trip_id else "ready",
+        step: int = 0,
+        ticks: Ref[int] = Ref(0);
 
     nav = useNavigate();
 
     async can with entry {
         # Declared up front: branch-local names don't survive the if/else in JS.
         found: list[MatchCardView] = [];
+        started: float = new(Date).getTime();
         try {
             if trip_id {
                 my_trip = await get_my_trip(trip_id);
                 found = await run_matching(trip_id);
+                # Let the search animation play for a beat even when matching is instant.
+                elapsed: float = new(Date).getTime() - started;
+                if elapsed < SEARCH_MIN_MS {
+                    await _sleep(SEARCH_MIN_MS - elapsed);
+                }
             } else {
                 found = await get_match_results();
             }
             cards = found;
             status = "ready" if len(found) > 0 else "empty";
+            if trip_id {
+                phase = "revealing";
+                await _sleep(REVEAL_STEP_MS * min(len(found), 6) + 900);
+            }
         } except Exception as e {
             status = "error";
         }
+        phase = "ready";
     }
+
+    # Advance the "what Along is doing" checklist while the search runs.
+    useEffect(lambda {
+        if phase != "searching" {
+            return lambda { };
+        }
+        timer = setInterval(lambda {  # jac:ignore[W2001]
+            n: int = (ticks.current or 0) + 1;
+            ticks.current = n;
+            step = n;
+        }, 520);
+        return lambda { clearInterval(timer); };  # jac:ignore[W2001]
+    }, [phase]);
 
     shown = _sorted(cards, sort_by);
     shown = [c for c in shown if c.overall_score >= min_score];
@@ -133,14 +162,8 @@ def:pub ResultsView() -> JsxElement {
                             {"Best fit" if sort_by == "fit" else "Earliest"} <Icon name="chevron" />
                         </button>
                     </div>
-                    {if status == "loading" {
-                        <div key="loading" className="loading-state">
-                            <span className="spinner" />
-                            <h3>Looking along your route</h3>
-                            <p>Comparing timing, pickup distance, and preferences.</p>
-                            <div className="skeleton" />
-                            <div className="skeleton short" />
-                        </div>
+                    {if status == "loading" or phase == "searching" {
+                        <SearchSteps key="searching" step={step} />
                     } elif len(shown) == 0 {
                         <div key="empty" className="empty-state">
                             <span><Icon name="map" size={30} /></span>
@@ -153,10 +176,11 @@ def:pub ResultsView() -> JsxElement {
                             }}
                         </div>
                     } else {
-                        <div key="cards" className="cards">
+                        <div key="cards" className={"cards" + (" revealing" if phase == "revealing" else "")}>
                             {for (i, c) in enumerate(shown) {
                                 <ResultCard
                                     key={c.id} card={c} selected={sel == i}
+                                    delay={(min(i, 6) * REVEAL_STEP_MS) / 1000.0 if phase == "revealing" else 0.0}
                                     onSelect={lambda { pick(i); }}
                                     onDetails={open_details} onMessage={open_chat}
                                 />
@@ -165,10 +189,43 @@ def:pub ResultsView() -> JsxElement {
                     }}
                 </section>
                 <section className={"map-panel" + (" mobile-hidden-map" if view == "list" else "")}>
-                    <MapCanvas my_trip={route_trip} cards={shown} selected={sel} onSelect={pick} kind={kind} />
+                    <MapCanvas my_trip={route_trip} cards={shown} selected={sel} onSelect={pick} kind={kind} phase={phase} />
                 </section>
             </div>
         </main>
+    </div>;
+}
+
+glob SEARCH_MIN_MS: float = 2600.0,
+     REVEAL_STEP_MS: float = 420.0,
+     SEARCH_STEPS: list[list[str]] = [
+         ["route", "Reading your route"],
+         ["search", "Scanning journeys nearby"],
+         ["clock", "Comparing schedules & detours"],
+         ["shield", "Checking preferences & trust"],
+         ["star", "Scoring your best matches"],
+     ];
+
+async def _sleep(ms: float) -> None {
+    await new(Promise, lambda (resolve: any, reject: any) { setTimeout(resolve, ms); });  # jac:ignore[E1053]
+}
+
+# The list-side half of the search animation: a live checklist of what the
+# matcher is doing while the map traces the route.
+def:pub SearchSteps(step: int) -> JsxElement {
+    active = min(step, len(SEARCH_STEPS) - 1);
+    return <div className="search-steps" role="status" aria-live="polite">
+        <div className="search-orb"><span /><span /><span /><Icon name="map" size={26} /></div>
+        <h3>Along is exploring the map</h3>
+        <p>Walking the journey graph for people heading your way.</p>
+        <ol>
+            {for (i, s) in enumerate(SEARCH_STEPS) {
+                <li key={s[0]} className={"done" if i < active else ("active" if i == active else "")}>
+                    <span className="step-dot">{(<Icon name="check" size={13} />) if i < active else <span className="step-num">{str(i + 1)}</span>}</span>
+                    {s[1]}
+                </li>
+            }}
+        </ol>
     </div>;
 }
 
@@ -189,7 +246,7 @@ def _sorted(cards: list[MatchCardView], sort_by: str) -> list[MatchCardView] {
 
 def:pub ResultCard(
     card: MatchCardView, selected: bool, onSelect: Callable[[], None],
-    onDetails: Callable[[str], None], onMessage: Callable[[str], None]
+    onDetails: Callable[[str], None], onMessage: Callable[[str], None], delay: float = 0.0
 ) -> JsxElement {
     other = card.other_trip;
     mine = card.my_trip;
@@ -204,7 +261,10 @@ def:pub ResultCard(
         onMessage(card.id);
     }
 
-    return <article className={"result-card" + (" selected" if selected else "")} onClick={select}>
+    return <article
+        className={"result-card" + (" selected" if selected else "") + (" card-enter" if delay > 0 else "")}
+        style={{"animationDelay": str(delay) + "s"}} onClick={select}
+    >
         <div className="result-top">
             <span className="avatar">{initials(card.other_handle)}</span>
             <div>
