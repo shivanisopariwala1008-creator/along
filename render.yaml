@@ -1,10 +1,12 @@
-# Render Blueprint: Along as two services.
+# Render Blueprint: Along as a single web service (Jac API + prebuilt frontend).
 #
-#   along      Jac API server (Python). Runs with --no_client so it never
-#              bundles the frontend at startup — that Vite build needs ~1.5 GB
-#              and would blow the 512 MB free-plan limit. Steady state ~180 MB.
-#   along-web  The frontend, built once as static files and served free from
-#              Render's CDN. It calls the API at the along service's URL.
+# Memory is the constraint (512 MB on free/starter). Two things keep it low:
+#   - The frontend is built at *build* time as a PWA. At runtime jac-scale sees
+#     the PWA manifest and serves those files instead of re-running Vite, which
+#     needs ~1.5 GB (it otherwise rebuilds on startup or on the first page hit).
+#   - `--faux` compiles every Jac module during the build; XDG_CACHE_HOME keeps
+#     that cache inside the deployed project so startup skips the ~700 MB cold
+#     compile. Measured locally: startup ~330 MB, steady ~340 MB.
 #
 # Render -> New -> Blueprint -> pick this repo. Secrets marked `sync: false`
 # are entered in the Render dashboard, never committed.
@@ -15,13 +17,13 @@ services:
     plan: free
     branch: main
     autoDeploy: true
-    # `--faux` compiles every Jac module once so startup reuses the cache
-    # (cold compile peaks ~700 MB). It exits non-zero after printing on this
-    # jac-scale version, which is harmless, hence `|| true`.
+    # `jac start --faux` exits non-zero after printing on this jac-scale
+    # version, which is harmless, hence `|| true`.
     buildCommand: >-
       pip install -r requirements.txt &&
-      (jac start main.jac --faux --no_client < /dev/null || true)
-    startCommand: jac start main.jac --port $PORT --host 0.0.0.0 --no_client < /dev/null
+      jac build main.jac --client pwa < /dev/null &&
+      (jac start main.jac --faux < /dev/null || true)
+    startCommand: jac start main.jac --port $PORT --host 0.0.0.0 < /dev/null
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
@@ -38,25 +40,3 @@ services:
         sync: false
       - key: OPENAI_API_KEY         # optional; also uncomment byllm in requirements.txt
         sync: false
-
-  - type: web
-    name: along-web
-    runtime: static
-    branch: main
-    autoDeploy: true
-    buildCommand: >-
-      pip install -r requirements.txt &&
-      JAC_CLIENT_API_BASE_URL=https://$API_HOST jac build main.jac --client static < /dev/null
-    staticPublishPath: .jac/client/dist
-    routes:
-      - type: rewrite               # client-side routes (/chat, /matches/...) all load the app
-        source: /*
-        destination: /index.html
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.14.7
-      - key: API_HOST
-        fromService:
-          name: along
-          type: web
-          property: host
