@@ -10,13 +10,17 @@ import from .AppHeader { AppHeader }
 import from .PlaceInput { PlaceInput }
 import from .TripAssistant { take_trip_draft }
 import from ...lib.along { flow_info, mode_of, role_of, today_iso }
-sv import from ...services.along { create_journey, get_maps_config, MapsConfigView }
+sv import from ...services.along { create_journey, get_maps_config, get_rental_spots, MapsConfigView, RentalSpotView }
 
+# Rental vehicles, described by the cargo space they give you.
 glob VEHICLES: list[list[str]] = [
-    ["Compact", "4 people · light luggage"], ["Sedan", "5 people · medium luggage"],
-    ["SUV", "5–7 people · extra cargo"], ["Minivan", "7 people · roomy cargo"],
-    ["Pickup", "2–5 people · standard or full-size"], ["Moving van", "2–3 people · large cargo"],
+    ["Compact car", "A few bags"], ["Sedan", "Suitcases, trunk space"],
+    ["SUV", "Boxes + a small dresser"], ["Minivan", "Seats fold for bulky items"],
+    ["Pickup truck", "Open bed for furniture"], ["Cargo van", "About a studio's worth"],
+    ["Box truck", "A 1–2 bedroom move"],
 ];
+
+glob SPACE_OPTIONS: list[str] = ["A few boxes", "Boxes + small furniture", "One room", "Studio / 1-bedroom", "2+ bedrooms"];
 
 glob DISTANCES: list[str] = ["Up to 2 miles", "Up to 5 miles", "Up to 10 miles"];
 
@@ -42,6 +46,10 @@ def:pub JourneyForm(kind: str) -> JsxElement {
         round_trip: bool = False,
         show_more: bool = False,
         places_down: bool = False,
+        return_date: str = "",
+        space_needed: str = "Boxes + small furniture",
+        rental_spots: list[RentalSpotView] = [],
+        spots_loading: bool = False,
         draft_note: str = "",
         draft_sentence: str = "",
         maps_key: str = "",
@@ -93,6 +101,26 @@ def:pub JourneyForm(kind: str) -> JsxElement {
         show_more = True;   # let them see the timing the assistant picked
         draft_note = (d["summary"] or "") as str;
         draft_sentence = (d["sentence"] or "") as str;
+    }
+
+    # Rent together: list car-rental counters around the chosen pickup.
+    async can with (origin_lat, origin_lng) entry {
+        if kind != "rental" or not origin_lat or not origin_lng {
+            rental_spots = [];
+            return;
+        }
+        spots_loading = True;
+        lat = origin_lat;
+        lng = origin_lng;
+        found: list[RentalSpotView] = await get_rental_spots(lat, lng);
+        rental_spots = found;
+        spots_loading = False;
+    }
+
+    def use_spot(sp: RentalSpotView) {
+        origin_name = sp.name + (", " + sp.address if sp.address else "");
+        origin_lat = sp.lat;
+        origin_lng = sp.lng;
     }
 
     async can with entry {
@@ -148,7 +176,17 @@ def:pub JourneyForm(kind: str) -> JsxElement {
             error = "Please choose the pickup and dropoff from the suggestions list.";
             return;
         }
-        if not recurring and not travel_date {
+        if kind == "rental" {
+            recurring = False;
+            if not travel_date {
+                error = "Please pick the rental pickup date.";
+                return;
+            }
+            if return_date and return_date < travel_date {
+                error = "The return date can’t be before the pickup date.";
+                return;
+            }
+        } elif not recurring and not travel_date {
             error = "Please pick a date for a one-time journey.";
             return;
         }
@@ -161,6 +199,9 @@ def:pub JourneyForm(kind: str) -> JsxElement {
         # Local names match the server parameters one-to-one.
         mode = mode_of(kind);
         role = role_of(kind);
+        if kind == "rental" {
+            time_preference = "depart_at";   # a rental starts at its pickup time
+        }
         detour_by_distance = {"Up to 2 miles": 5, "Up to 5 miles": 10, "Up to 10 miles": 20};
         flexible_minutes = 20;
         seats_available = count if kind == "buddy" else 0;
@@ -173,7 +214,8 @@ def:pub JourneyForm(kind: str) -> JsxElement {
                 mode, role, origin_name, destination_name, travel_date, time_preference, time,
                 recurring, flexible_minutes, seats_available, people, max_detour_minutes,
                 pickup_distance, vehicle, moving_help, age_pref, gender_pref, notes,
-                origin_lat, origin_lng, destination_lat, destination_lng, round_trip
+                origin_lat, origin_lng, destination_lat, destination_lng,
+                round_trip and kind != "rental", return_date, space_needed
             );
             nav("/results?tripId=" + trip_id);
         } except Exception as ex {
@@ -245,20 +287,97 @@ def:pub JourneyForm(kind: str) -> JsxElement {
                             />
                         }}
                     </div>
-                    <label className="moving-toggle round-trip-toggle">
-                        <input type="checkbox" checked={round_trip} onChange={lambda (e: ChangeEvent) { round_trip = not round_trip; }} />
-                        <span><Icon name="swap" /></span>
-                        <div><strong>Round trip</strong><small>I’m also coming back the same way</small></div>
-                        <i />
-                    </label>
+                    {if kind != "rental" {
+                        <label key="round" className="moving-toggle round-trip-toggle">
+                            <input type="checkbox" checked={round_trip} onChange={lambda (e: ChangeEvent) { round_trip = not round_trip; }} />
+                            <span><Icon name="swap" /></span>
+                            <div><strong>Round trip</strong><small>I’m also coming back the same way</small></div>
+                            <i />
+                        </label>
+                    } elif origin_lat {
+                        <div key="spots" className="rental-spots">
+                            <div className="rental-spots-head">
+                                <Icon name="key" size={16} />
+                                <strong>Car rental counters near your pickup</strong>
+                                <small>{"Looking…" if spots_loading else (str(len(rental_spots)) + " within 20 km")}</small>
+                            </div>
+                            {if not spots_loading and len(rental_spots) == 0 {
+                                <p key="none" className="rental-empty">No rental counters found nearby — try a larger town or the airport.</p>
+                            }}
+                            <ul>
+                                {for sp in rental_spots[:6] {
+                                    <li key={sp.name + sp.address}>
+                                        <div>
+                                            <strong>{sp.name}</strong>
+                                            <small>{str(sp.km) + " km" + (f" · ★ {sp.rating:.1f} ({sp.reviews})" if sp.reviews else "") + (" · " + sp.address if sp.address else "")}</small>
+                                        </div>
+                                        <a href={sp.maps_url} target="_blank" rel="noreferrer">Map ↗</a>
+                                        <button type="button" className="btn btn-secondary" onClick={lambda (e: MouseEvent) { use_spot(sp); }}>Use as pickup</button>
+                                    </li>
+                                }}
+                            </ul>
+                        </div>
+                    }}
                 </section>
+
+                {if kind == "rental" {
+                    <section key="dates" className="form-card">
+                        <div className="form-card-title">
+                            <span>2</span>
+                            <div><h2>Rental dates</h2><p>When you’ll pick the car up and bring it back.</p></div>
+                        </div>
+                        <div className="field-grid">
+                            <TextField label="Pickup date" value={travel_date} icon="calendar" inputType="date" onValue={lambda (v: str) { travel_date = v; }} />
+                            <TextField label="Pickup time" value={time} icon="clock" inputType="time" onValue={lambda (v: str) { time = v; }} />
+                            <TextField label="Return date" value={return_date} icon="calendar" inputType="date" onValue={lambda (v: str) { return_date = v; }} />
+                            <SelectField
+                                label="People sharing the rental" value={_count_label(kind, count)}
+                                options={[_count_label(kind, n) for n in count_options]}
+                                onValue={lambda (v: str) { count = int(v.split(" ")[0]); }}
+                            />
+                            <SelectField label="How far you’ll go to the counter" value={distance} options={DISTANCES} onValue={lambda (v: str) { distance = v; }} />
+                        </div>
+                    </section>
+                    <section key="vehicle" className="form-card">
+                        <div className="form-card-title">
+                            <span>3</span>
+                            <div><h2>Vehicle &amp; space</h2><p>Pick by how much you need to carry. You’ll confirm the exact car together.</p></div>
+                        </div>
+                        <label className="moving-toggle">
+                            <input type="checkbox" checked={moving_help} onChange={lambda (e: ChangeEvent) { moving_help = not moving_help; }} />
+                            <span><Icon name="key" /></span>
+                            <div><strong>I’m moving things</strong><small>We’ll favor partners and vehicles with cargo space</small></div>
+                            <i />
+                        </label>
+                        {if moving_help {
+                            <div key="space" className="field-grid space-grid">
+                                <SelectField label="Space you need" value={space_needed} options={SPACE_OPTIONS} onValue={lambda (v: str) { space_needed = v; }} />
+                            </div>
+                        }}
+                        <div className="vehicle-grid">
+                            {for v in VEHICLES {
+                                <button
+                                    type="button" key={v[0]}
+                                    className={"vehicle-card selected" if vehicle == v[0] else "vehicle-card"}
+                                    onClick={lambda (e: MouseEvent) { vehicle = v[0]; }}
+                                >
+                                    <span className={"vehicle-shape vehicle-" + v[0].lower().replace(" ", "-")}><Icon name="car" size={30} /></span>
+                                    <strong>{v[0]}</strong>
+                                    <small>{v[1]}</small>
+                                    {vehicle == v[0] and <b><Icon name="check" size={14} /></b>}
+                                </button>
+                            }}
+                        </div>
+                    </section>
+                }}
 
                 <button type="button" className="more-options" onClick={lambda (e: MouseEvent) { show_more = not show_more; }} aria-expanded={show_more}>
                     <Icon name="tune" />
-                    <span><strong>More options</strong><small>{("Timing, vehicle and" if kind == "rental" else "Timing and") + " match preferences — optional"}</small></span>
+                    <span><strong>More options</strong><small>{("Match preferences" if kind == "rental" else "Timing and match preferences") + " — optional"}</small></span>
                     <Icon name="chevron" className={"more-chevron" + (" open" if show_more else "")} />
                 </button>
                 {if show_more {
+                    if kind != "rental" {
                     <section key="timing" className="form-card">
                         <div className="form-card-title">
                             <span>2</span>
@@ -297,33 +416,6 @@ def:pub JourneyForm(kind: str) -> JsxElement {
                         </div>
                     </section>
 
-                    if kind == "rental" {
-                        <section key="vehicle" className="form-card">
-                            <div className="form-card-title">
-                                <span>3</span>
-                                <div><h2>Choose a vehicle type</h2><p>Capacity is a guide. You’ll confirm the vehicle together.</p></div>
-                            </div>
-                            <label className="moving-toggle">
-                                <input type="checkbox" checked={moving_help} onChange={lambda (e: ChangeEvent) { moving_help = not moving_help; }} />
-                                <span><Icon name="key" /></span>
-                                <div><strong>I need help with moving</strong><small>Prioritize vehicles with more cargo space</small></div>
-                                <i />
-                            </label>
-                            <div className="vehicle-grid">
-                                {for v in VEHICLES {
-                                    <button
-                                        type="button" key={v[0]}
-                                        className={"vehicle-card selected" if vehicle == v[0] else "vehicle-card"}
-                                        onClick={lambda (e: MouseEvent) { vehicle = v[0]; }}
-                                    >
-                                        <span className={"vehicle-shape vehicle-" + v[0].lower().replace(" ", "-")}><Icon name="car" size={30} /></span>
-                                        <strong>{v[0]}</strong>
-                                        <small>{v[1]}</small>
-                                        {vehicle == v[0] and <b><Icon name="check" size={14} /></b>}
-                                    </button>
-                                }}
-                            </div>
-                        </section>
                     }
 
                     <section key="prefs" className="form-card">
@@ -366,6 +458,9 @@ def:pub JourneyForm(kind: str) -> JsxElement {
 def _count_label(kind: str, n: int) -> str {
     if kind == "buddy" {
         return str(n) + (" seat" if n == 1 else " seats");
+    }
+    if kind == "rental" {
+        return "1 person (just me)" if n == 1 else str(n) + " people sharing";
     }
     return str(n) + (" person" if n == 1 else " people");
 }

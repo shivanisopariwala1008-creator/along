@@ -236,7 +236,7 @@ glob DEMO_PEOPLE: list[dict] = [
      "note": "Looking for a regular carpool."},
     # Rental partners ("Rent together")
     {"handle": "MovingNorth", "name": "Alexis", "role": "PEER", "mode": "rental", "from": "Novi, MI",
-     "to": "Detroit, MI", "dep": "09:00", "arr": "", "seats": 0, "people": 2, "vehicle": "Pickup",
+     "to": "Detroit, MI", "dep": "09:00", "arr": "", "seats": 0, "people": 2, "vehicle": "Pickup truck",
      "moving": True, "rating": 4.8, "reviews": 6, "note": "Also moving and needs cargo room."},
     {"handle": "WeekendWay", "name": "Riley", "role": "PEER", "mode": "rental", "from": "Farmington Hills, MI",
      "to": "Detroit, MI", "dep": "10:00", "arr": "", "seats": 0, "people": 1, "vehicle": "SUV",
@@ -500,7 +500,7 @@ impl create_journey(
     vehicle: str, moving_help: bool, age_pref: str, gender_pref: str, notes: str,
     origin_lat: float = 0.0, origin_lng: float = 0.0,
     destination_lat: float = 0.0, destination_lng: float = 0.0,
-    round_trip: bool = False
+    round_trip: bool = False, return_date: str = "", space_needed: str = ""
 ) -> str {
     me = _me();
     clean_mode = mode if mode in ["ride", "rental", "cab"] else "ride";
@@ -535,7 +535,9 @@ impl create_journey(
     trip.pickup_distance = pickup_distance.strip()[:30];
     trip.age_pref = age_pref.strip()[:30] or "No preference";
     trip.gender_pref = gender_pref.strip()[:30] or "No preference";
-    trip.round_trip = round_trip;
+    trip.round_trip = round_trip if clean_mode != "rental" else False;
+    trip.return_date = return_date.strip()[:10] if clean_mode == "rental" else "";
+    trip.space_needed = space_needed.strip()[:40] if clean_mode == "rental" and moving_help else "";
     me +>:Posts:+> trip;
 
     # Make sure there is always someone to match with in the demo.
@@ -596,7 +598,8 @@ def _trip_view(t: Trip) -> TripView {
         recurring=t.recurring, smoking=_preference_of(t).smoking,
         origin_lat=t.origin_lat, origin_lng=t.origin_lng,
         destination_lat=t.destination_lat, destination_lng=t.destination_lng,
-        owner_rating=rating[0], owner_reviews=rating[1], round_trip=t.round_trip
+        owner_rating=rating[0], owner_reviews=rating[1], round_trip=t.round_trip,
+        return_date=t.return_date, space_needed=t.space_needed
     );
 }
 
@@ -1574,7 +1577,7 @@ impl mark_notifications_read(ids: list[str]) -> int {
 
 import re;
 
-glob VEHICLE_CHOICES: list[str] = ["Compact", "Sedan", "SUV", "Minivan", "Pickup", "Moving van"],
+glob VEHICLE_CHOICES: list[str] = ["Compact car", "Sedan", "SUV", "Minivan", "Pickup truck", "Cargo van", "Box truck"],
      WEEKDAYS: list[str] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
 def _gemini_key() -> str {
@@ -1598,7 +1601,7 @@ def _draft_schema() -> dict {
             "seats": {"type": "INTEGER", "description": "seats offered when journey_type is buddy, else 0"},
             "people": {"type": "INTEGER", "description": "people travelling (default 1)"},
             # Gemini rejects "" in an enum, so "none" stands for no vehicle.
-            "vehicle": {"type": "STRING", "enum": ["none", "Compact", "Sedan", "SUV", "Minivan", "Pickup", "Moving van"]},
+            "vehicle": {"type": "STRING", "enum": ["none", "Compact car", "Sedan", "SUV", "Minivan", "Pickup truck", "Cargo van", "Box truck"]},
             "moving_help": {"type": "BOOLEAN", "description": "true if they mention moving, boxes, furniture"},
             "summary": {"type": "STRING", "description": "One short friendly sentence restating the plan"}
         },
@@ -2117,4 +2120,46 @@ def _rules_pick_handoff(places: list[dict]) -> tuple[int, str] {
     }
     p = places[best];
     return (best, f"A busy, well-reviewed {p['type']} right by where both routes meet.");
+}
+
+# ---------------------------------------------------------------------------
+# Rent together — car-rental counters near the pickup (Places API, New)
+# ---------------------------------------------------------------------------
+
+impl get_rental_spots(lat: float, lng: float) -> list[RentalSpotView] {
+    key = _maps_key();
+    if not key or not lat or not lng {
+        return [];
+    }
+    body = {
+        "includedTypes": ["car_rental"], "maxResultCount": 12, "rankPreference": "DISTANCE",
+        "locationRestriction": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": 20000.0}}
+    };
+    headers = {
+        "Content-Type": "application/json", "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.businessStatus"
+    };
+    result = _http_json("https://places.googleapis.com/v1/places:searchNearby", body, headers);
+    if result is None {
+        return [];
+    }
+    spots: list[RentalSpotView] = [];
+    places: list[dict] = (result as dict).get("places", []) as list[dict];
+    for p in places {
+        if p.get("businessStatus", "OPERATIONAL") != "OPERATIONAL" {
+            continue;
+        }
+        loc: dict = p.get("location", {}) as dict;
+        plat: float = loc.get("latitude", lat) as float;
+        plng: float = loc.get("longitude", lng) as float;
+        shown: dict = (p.get("displayName") or {}) as dict;
+        name = str(shown.get("text", "Car rental"));
+        spots.append(RentalSpotView(
+            name=name, address=str(p.get("formattedAddress", "")), lat=plat, lng=plng,
+            rating=p.get("rating", 0.0) as float, reviews=p.get("userRatingCount", 0) as int,
+            km=float(f"{_haversine_km(lat, lng, plat, plng):.1f}"),
+            maps_url="https://www.google.com/maps/search/?api=1&query=" + urlencode({"q": name})[2:] + "&query_place_id=" + str(p.get("id", ""))
+        ));
+    }
+    return spots;
 }

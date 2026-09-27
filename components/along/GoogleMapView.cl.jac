@@ -1,6 +1,6 @@
 """GoogleMapView — the results/details map on real Google Maps: your driving
 route (from the Routes API via get_trip_route), the selected match's route
-dashed on top, live traffic, and tappable match markers."""
+dashed on top, and numbered match pins (1 = best match)."""
 
 import from "@vis.gl/react-google-maps" { APIProvider, Map as GoogleMap, AdvancedMarker, useMap }
 import from react { useEffect }
@@ -73,26 +73,20 @@ def:pub GoogleMapView(
                         onClick={lambda { onSelect(i); }}
                     >
                         <span className={"result-marker " + info["accent"] + (" active" if selected == i else "")}>
-                            <span>{info["marker"]}</span>
+                            <span>{str(i + 1)}</span>
                             {selected == i and <b>{when_text(c)}</b>}
                         </span>
                     </AdvancedMarker>
                 }
             }}
         </GoogleMap>
-        <div className="traffic-legend">
-            <strong>Live traffic</strong>
-            <span><i className="legend-green" /> Clear</span>
-            <span><i className="legend-amber" /> Moderate</span>
-            <span><i className="legend-red" /> Busy</span>
-        </div>
         <div className="type-legend">
             {if relay is not None {
                 <span key="l1" className="type-legend-you first"><i className="leg-swatch" />Leg 1</span>
                 <span key="l2" className="type-legend-you"><i className="leg-swatch blue" />Leg 2</span>
                 <span key="h" className="type-legend-you"><span className="tiny-end handoff">H</span>Handoff</span>
             } else {
-                <span key="m" className="type-legend-you first"><span className={"tiny-marker " + info["accent"]}>{info["marker"]}</span>{info["marker_label"]}</span>
+                <span key="m" className="type-legend-you first"><span className={"tiny-marker " + info["accent"]}>1</span>Matches, best first</span>
                 if my_trip is not None {
                     <span key="you" className="type-legend-you"><span className="tiny-end">A</span>Your route</span>
                 }
@@ -104,8 +98,8 @@ def:pub GoogleMapView(
     </APIProvider>;
 }
 
-# Draws the route polylines + Google's live traffic layer onto the parent map,
-# then fits the view to them. Renders nothing itself.
+# Draws the route polylines onto the parent map, then fits the view to them.
+# Renders nothing itself.
 def:pub RouteLines(lines: list[dict], signature: str) -> JsxElement {
     gmap: any = useMap();
 
@@ -114,8 +108,6 @@ def:pub RouteLines(lines: list[dict], signature: str) -> JsxElement {
             return lambda { };
         }
         g: any = window.google;  # jac:ignore[E1030]
-        traffic = new(g.maps.TrafficLayer);  # jac:ignore[E1053]
-        traffic.setMap(gmap);
         drawn: list[any] = [];
         bounds = new(g.maps.LatLngBounds);  # jac:ignore[E1053]
         for line in lines {
@@ -144,7 +136,6 @@ def:pub RouteLines(lines: list[dict], signature: str) -> JsxElement {
             gmap.fitBounds(bounds, 48);
         }
         return lambda {
-            traffic.setMap(None);
             for poly in drawn {
                 poly.setMap(None);
             }
@@ -154,15 +145,8 @@ def:pub RouteLines(lines: list[dict], signature: str) -> JsxElement {
     return <span className="route-lines" hidden={True} />;
 }
 
-# Scan dots scattered around the route while searching (degrees, ~5-9 km).
-glob PROBE_DEG: list[list[float]] = [
-    [0.06, -0.08], [-0.05, 0.07], [0.08, 0.06], [-0.07, -0.06], [0.04, 0.09],
-    [-0.04, -0.1], [0.09, -0.02], [-0.09, 0.03], [0.03, -0.07], [-0.03, 0.08],
-];
-
-# The map-side half of the search animation, drawn with plain Google Maps
-# overlays: searching = route trace + radar pulse + blinking scan dots;
-# revealing = graph edges growing from your start to each match, one by one.
+# The map-side half of the search animation: while searching, your real
+# route is traced and a soft pulse marks your start. Nothing else is drawn.
 def:pub SearchOverlay(origin: list[float], trace: list[list[float]], targets: list[list[float]], phase: str) -> JsxElement {
     gmap: any = useMap();
     sig = phase + ":" + str(len(trace)) + ":" + str(len(targets)) + ":" + (f"{origin[0]:.3f}" if len(origin) == 2 else "none");
@@ -205,44 +189,6 @@ def:pub SearchOverlay(origin: list[float], trace: list[list[float]], targets: li
                 }, 30));
             }
 
-            for (k, off) in enumerate(PROBE_DEG) {
-                base = trace[min(int(k * (len(trace) - 1) / (len(PROBE_DEG) - 1)), len(trace) - 1)] if len(trace) > 0 else origin;
-                probe = new(g.maps.Circle, {  # jac:ignore[E1053]
-                    "center": {"lat": base[0] + off[0], "lng": base[1] + off[1]}, "radius": 1400,
-                    "map": gmap, "clickable": False, "zIndex": 45, "strokeOpacity": 0,
-                    "fillColor": "#386fa4", "fillOpacity": 0.0
-                });
-                drawn.append(probe);
-                timers.append(setInterval(lambda {  # jac:ignore[W2001]
-                    probe.setOptions({"fillOpacity": 0.7 if probe.get("fillOpacity") < 0.3 else 0.12});
-                }, 520 + k * 70));
-            }
-        }
-
-        if phase == "revealing" {
-            for (k, t) in enumerate(targets[0:6]) {
-                timers.append(setTimeout(lambda {  # jac:ignore[W2001]
-                    link = new(g.maps.Polyline, {  # jac:ignore[E1053]
-                        "path": [home, home], "map": gmap, "zIndex": 55, "clickable": False,
-                        "strokeColor": "#176b45", "strokeWeight": 3, "strokeOpacity": 0.9, "geodesic": True
-                    });
-                    dot = new(g.maps.Circle, {  # jac:ignore[E1053]
-                        "center": {"lat": t[0], "lng": t[1]}, "radius": 900, "map": gmap, "zIndex": 56,
-                        "clickable": False, "strokeColor": "#176b45", "strokeWeight": 2,
-                        "fillColor": "#c9e96c", "fillOpacity": 0.8
-                    });
-                    drawn.append(link);
-                    drawn.append(dot);
-                    grow: dict[str, int] = {"f": 0};
-                    timers.append(setInterval(lambda {  # jac:ignore[W2001]
-                        if grow["f"] < 12 {
-                            grow["f"] = grow["f"] + 1;
-                            f = grow["f"] / 12;
-                            link.setPath([home, {"lat": origin[0] + (t[0] - origin[0]) * f, "lng": origin[1] + (t[1] - origin[1]) * f}]);
-                        }
-                    }, 25));
-                }, k * 420));
-            }
         }
 
         return lambda {

@@ -654,3 +654,33 @@ button.avatar { cursor: pointer; }
 .leg-swatch.blue { background: var(--al-blue); }
 .type-legend-you.first { margin-left: 0; padding-left: 0; border-left: 0; }
 .tiny-end.handoff { background: var(--al-lime); color: var(--al-green-dark); }
+
+/* Cleaner maps: one route line, numbered pins, no decorative/traffic lines */
+.route-overlay .route-line { fill: none; stroke: var(--al-green); stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+.route-overlay .leg-line { fill: none; stroke: var(--al-green); stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+.route-overlay .leg-line.blue { stroke: var(--al-blue); }
+.handoff-pin.drawn { position: absolute; z-index: 6; transform: translate(-50%, -120%); }
+.result-marker > span { font-size: 12px; font-weight: 800; }
+.result-marker.active > span { font-size: 14px; }
+.rank-chip { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--al-green); color: white; font: 800 11px "Manrope"; flex: 0 0 auto; margin-right: -2px; }
+.map-canvas .radar i { animation-duration: 2.6s; }
+
+/* Rent together: rental counters near the pickup */
+.rental-spots { margin-top: 18px; border: 1px solid var(--al-line); border-radius: 14px; background: var(--al-surface-soft); padding: 12px; }
+.rental-spots-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.rental-spots-head svg { color: var(--al-purple); }
+.rental-spots-head strong { font-size: 12px; }
+.rental-spots-head small { margin-left: auto; color: var(--al-muted); font-size: 10px; }
+.rental-spots ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.rental-spots li { display: flex; align-items: center; gap: 10px; background: white; border: 1px solid var(--al-line); border-radius: 10px; padding: 9px 10px; }
+.rental-spots li > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.rental-spots li strong { font-size: 12px; }
+.rental-spots li small { color: var(--al-muted); font-size: 10px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rental-spots li a { color: var(--al-green); font-size: 10px; font-weight: 700; white-space: nowrap; }
+.rental-spots li .btn { min-height: 30px; padding: 5px 10px; font-size: 10px; white-space: nowrap; }
+.rental-empty { color: var(--al-muted); font-size: 11px; margin: 4px 2px; }
+.space-grid { margin-bottom: 16px; }
+@media (max-width: 700px) {
+  .rental-spots li { flex-wrap: wrap; }
+  .rental-spots li > div { flex-basis: 100%; }
+}

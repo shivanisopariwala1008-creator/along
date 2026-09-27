@@ -78,7 +78,9 @@ node Trip {
         demo_rating: float = 0.0,             # seeded reputation for demo users only
         demo_reviews: int = 0,
         route_json: str = "",                 # cached Google road route, see get_trip_route
-        round_trip: bool = False;
+        round_trip: bool = False,
+        return_date: str = "",                # rentals: when the car goes back
+        space_needed: str = "";               # rentals when moving: how much cargo space
 }
 
 node Location {
@@ -201,7 +203,14 @@ obj TripView {
         recurring: bool = True, smoking: bool = False,
         origin_lat: float = 0.0, origin_lng: float = 0.0,
         destination_lat: float = 0.0, destination_lng: float = 0.0,
-        owner_rating: float = 0.0, owner_reviews: int = 0, round_trip: bool = False;
+        owner_rating: float = 0.0, owner_reviews: int = 0, round_trip: bool = False,
+        return_date: str = "", space_needed: str = "";
+}
+
+# A place that rents cars near a pickup point (Google Places).
+obj RentalSpotView {
+    has name: str = "", address: str = "", lat: float = 0.0, lng: float = 0.0,
+        rating: float = 0.0, reviews: int = 0, km: float = 0.0, maps_url: str = "";
 }
 
 obj AgentNoteView {
@@ -458,8 +467,11 @@ def create_journey(
     # Exact coordinates from the Google Places dropdown; 0 = look the name up.
     origin_lat: float = 0.0, origin_lng: float = 0.0,
     destination_lat: float = 0.0, destination_lng: float = 0.0,
-    round_trip: bool = False
+    round_trip: bool = False, return_date: str = "", space_needed: str = ""
 ) -> str;
+
+# Car-rental counters near a point, nearest first (needs a Google Maps key).
+def get_rental_spots(lat: float, lng: float) -> list[RentalSpotView];
 
 def get_my_trip(trip_id: str) -> TripView | None;
 

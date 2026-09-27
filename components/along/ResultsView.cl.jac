@@ -207,7 +207,7 @@ def:pub ResultsView() -> JsxElement {
                         <div key="cards" className={"cards" + (" revealing" if phase == "revealing" else "")}>
                             {for (i, c) in enumerate(shown) {
                                 <ResultCard
-                                    key={c.id} card={c} selected={sel == i}
+                                    key={c.id} card={c} selected={sel == i} rank={i + 1}
                                     delay={(min(i, 6) * REVEAL_STEP_MS) / 1000.0 if phase == "revealing" else 0.0}
                                     onSelect={lambda { pick(i); }}
                                     onDetails={open_details} onMessage={open_chat} onProfile={open_profile}
@@ -276,7 +276,7 @@ def _sorted(cards: list[MatchCardView], sort_by: str) -> list[MatchCardView] {
 def:pub ResultCard(
     card: MatchCardView, selected: bool, onSelect: Callable[[], None],
     onDetails: Callable[[str], None], onMessage: Callable[[str], None], delay: float = 0.0,
-    onProfile: Callable[[str], None] | None = None
+    onProfile: Callable[[str], None] | None = None, rank: int = 0
 ) -> JsxElement {
     other = card.other_trip;
     mine = card.my_trip;
@@ -302,6 +302,7 @@ def:pub ResultCard(
         style={{"animationDelay": str(delay) + "s"}} onClick={select}
     >
         <div className="result-top">
+            {rank > 0 and <span className="rank-chip" title="Number on the map">{str(rank)}</span>}
             <span className="avatar">{initials(card.other_handle)}</span>
             <div>
                 <h3><button className="name-link" onClick={profile} title="View profile">{card.other_handle}</button></h3>

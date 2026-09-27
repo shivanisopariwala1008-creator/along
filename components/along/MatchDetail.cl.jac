@@ -7,7 +7,7 @@ import from .Icon { Icon }
 import from .AppHeader { AppHeader }
 import from .MapCanvas { MapCanvas }
 import from ...lib.along {
-    flow_info, flow_of_trip, initials, rating_text, has_rating, when_text, fmt_time, plural
+    flow_info, flow_of_trip, initials, rating_text, has_rating, when_text, fmt_time, plural, fmt_date
 }
 sv import from ...services.along {
     get_match_details, explain_match, close_match, MatchDetailView, MatchCardView, TripView
@@ -214,7 +214,10 @@ def _preference_chips(t: TripView | None) -> list[str] {
     if t.mode == "rental" {
         chips = chips + ["Vehicle: " + (t.vehicle or "Flexible")];
         if t.moving_help {
-            chips = chips + ["Needs moving help"];
+            chips = chips + ["Moving: " + (t.space_needed or "needs cargo space")];
+        }
+        if t.return_date {
+            chips = chips + ["Returns " + fmt_date(t.return_date)];
         }
     }
     if t.recurring {

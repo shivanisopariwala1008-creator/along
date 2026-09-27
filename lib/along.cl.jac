@@ -186,7 +186,7 @@ def:pub when_text(card: MatchCardView) -> str {
         return "";
     }
     if card.mode == "rental" {
-        return (fmt_date(other.travel_date) or "Flexible dates") + " · from " + fmt_time(other.departure_time);
+        return rental_dates(other) + " · pickup " + fmt_time(other.departure_time);
     }
     if card.mode == "cab" {
         return "Ready around " + fmt_time(other.departure_time);
@@ -203,7 +203,8 @@ def:pub meta_text(card: MatchCardView) -> str {
         return "";
     }
     if card.mode == "rental" {
-        return plural(other.people, "person", "people") + " · " + (other.vehicle or "Any vehicle");
+        space = (" · space: " + other.space_needed) if other.space_needed else "";
+        return plural(other.people, "person", "people") + " · " + (other.vehicle or "Any vehicle") + space;
     }
     if card.mode == "ride" and other.role == "DRIVER" {
         return plural(other.seats_available, "seat", "seats") + " · near " + short_place(other.origin_name);
@@ -211,10 +212,22 @@ def:pub meta_text(card: MatchCardView) -> str {
     return plural(other.people, "person", "people") + " · " + short_place(other.origin_name);
 }
 
+# "Sat, Oct 3 → Mon, Oct 5" for a rental (or just the pickup day).
+def:pub rental_dates(t: TripView) -> str {
+    start = fmt_date(t.travel_date) or "Flexible dates";
+    if t.return_date and t.return_date != t.travel_date {
+        return start + " → " + fmt_date(t.return_date);
+    }
+    return start;
+}
+
 # What the searcher asked for, for the results toolbar ("Sat, May 24 · Arrive by 9:00 AM").
 def:pub trip_timing(t: TripView | None) -> str {
     if t is None {
         return "";
+    }
+    if t.mode == "rental" {
+        return rental_dates(t) + " · pickup " + fmt_time(t.departure_time);
     }
     day = "Weekdays" if t.recurring else (fmt_date(t.travel_date) or "One time");
     trip = " · Round trip" if t.round_trip else "";

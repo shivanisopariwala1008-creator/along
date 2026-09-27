@@ -66,10 +66,10 @@ glob PEOPLE: list[dict] = [
     person("lena", "Lena Fischer", "Brighton, MI", "(810) 555-0168", ride("RIDER", "Brighton, MI", "Ann Arbor, MI", "arrive_by", "08:45", recurring=False)),
     person("zoe", "Zoe Adams", "Grand Blanc, MI", "(810) 555-0121", ride("RIDER", "Grand Blanc, MI", "Novi, MI", "arrive_by", "09:20")),
     # --- Rent together ---
-    person("riley", "Riley Chen", "Novi, MI", "(248) 555-0164", peer("rental", "Novi, MI", "Detroit, MI", "arrive_by", "10:00", people=2, vehicle="Pickup", moving=True)),
+    person("riley", "Riley Chen", "Novi, MI", "(248) 555-0164", peer("rental", "Novi, MI", "Detroit, MI", "arrive_by", "10:00", people=2, vehicle="Pickup truck", moving=True)),
     person("kevin", "Kevin Nguyen", "Novi, MI", "(248) 555-0107", peer("rental", "Novi, MI", "Detroit, MI", "depart_at", "09:30", vehicle="SUV", round_trip=True)),
     person("sofia", "Sofia Martinez", "Livonia, MI", "(734) 555-0145", peer("rental", "Livonia, MI", "Detroit, MI", "arrive_by", "11:00", people=2, vehicle="Minivan", moving=True)),
-    person("tom", "Tom Becker", "Ann Arbor, MI", "(734) 555-0183", peer("rental", "Ann Arbor, MI", "Detroit, MI", "depart_at", "08:30", people=3, vehicle="Moving van", moving=True)),
+    person("tom", "Tom Becker", "Ann Arbor, MI", "(734) 555-0183", peer("rental", "Ann Arbor, MI", "Detroit, MI", "depart_at", "08:30", people=3, vehicle="Box truck", moving=True)),
     # --- Share a cab ---
     person("jordan", "Jordan Kim", "Detroit, MI", "(313) 555-0123", peer("cab", "Detroit Metro Airport", "Downtown Detroit", "depart_at", "18:30")),
     person("sam", "Sam Rivera", "Detroit, MI", "(313) 555-0188", peer("cab", "Detroit Metro Airport", "Midtown Detroit", "depart_at", "18:15")),
